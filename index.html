@@ -41,7 +41,7 @@
 	<script type="module">
 
 	import * as THREE from "../libs/three.js/build/three.module.js";
-	import { VRButton } from "https://unpkg.com/three@0.126.0/examples/jsm/webxr/VRButton.js";
+
 		window.viewer = new Potree.Viewer(document.getElementById("potree_render_area"));
 		viewer.renderer.xr.enabled = true;
 		viewer.setEDLEnabled(true);
@@ -56,7 +56,7 @@
 			$("#menu_appearance").next().show();
 			//viewer.toggleSidebar();
 		});
-		document.body.appendChild(VRButton.createButton(viewer));
+
 		// Lion
 		Potree.loadPointCloud("../pointclouds/lion_takanawa/cloud.js", "lion", function(e){
 			viewer.scene.addPointCloud(e.pointcloud);
