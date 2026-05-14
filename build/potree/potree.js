@@ -54976,6 +54976,7 @@
 
 			pickParams.x = mouse.x;
 			pickParams.y = renderer.domElement.clientHeight - mouse.y;
+			pickParams.pickWindowSize = 7;
 
 			let raycaster = new Raycaster();
 			raycaster.setFromCamera(nmouse, camera);
@@ -87483,8 +87484,15 @@ ENDSEC
 			}
 
 			this.menu = null;
+			this.menuButtons = [];
+			this._menuRaycaster = new Raycaster();
 
 			const controllerModelFactory = new XRControllerModelFactory();
+			// Prefer a local copy of the webxr-input-profiles assets to avoid
+			// missing-node warnings (and to prevent loading from the CDN).
+			// After you download the profiles into `libs/webxr-input-profiles/profiles`
+			// set the factory path to point there so the GLTF and profile JSONs match.
+			controllerModelFactory.path = './libs/webxr-input-profiles/profiles';
 
 			let sg = new SphereGeometry(1, 32, 32);
 			let sm = new MeshNormalMaterial();
@@ -87536,6 +87544,8 @@ ENDSEC
 
 				controller.addEventListener( 'selectstart', () => {this.onTriggerStart(controller);});
 				controller.addEventListener( 'selectend', () => {this.onTriggerEnd(controller);});
+				controller.addEventListener( 'squeezestart', () => {this.onSqueezeStart(controller);});
+				controller.addEventListener( 'squeezeend', () => {this.onSqueezeEnd(controller);});
 
 				this.cPrimary =  controller;
 
@@ -87586,6 +87596,8 @@ ENDSEC
 
 				controller.addEventListener( 'selectstart', () => {this.onTriggerStart(controller);});
 				controller.addEventListener( 'selectend', () => {this.onTriggerEnd(controller);});
+				controller.addEventListener( 'squeezestart', () => {this.onSqueezeStart(controller);});
+				controller.addEventListener( 'squeezeend', () => {this.onSqueezeEnd(controller);});
 
 				this.cSecondary =  controller;
 			}
@@ -87594,6 +87606,14 @@ ENDSEC
 			this.mode_translate = new TranslationMode();
 			this.mode_rotScale = new RotScaleMode();
 			this.setMode(this.mode_fly);
+
+			this.pointsMode = false;
+			this.activeMeasurement = null;
+
+			document.addEventListener('vr-mode-select', (e) => {
+				if(e.detail.mode !== 3 && this.pointsMode) this._finishMeasurement();
+				this.pointsMode = (e.detail.mode === 3);
+			});
 		}
 
 		createSlider(label, min, max){
@@ -87645,43 +87665,117 @@ ENDSEC
 		}
 
 		initMenu(controller){
-
-			if(this.menu){
-				return;
-			}
-
-			let node = new Object3D("vr menu");
-
-			// let nSlider = this.createSlider("speed", 0, 1);
-			// let nInfo = this.createInfo();
-
-			// // node.add(nSlider);
-			// node.add(nInfo);
-
-			// {
-			// 	node.rotation.set(-1.5, 0, 0)
-			// 	node.scale.set(0.3, 0.3, 0.3);
-			// 	node.position.set(-0.2, -0.002, -0.1)
-
-			// 	// nInfo.position.set(0.5, 0, 0);
-			// 	nInfo.scale.set(0.8, 0.6, 0);
-
-			// 	// controller.add(node);
-			// }
-
-			// node.position.set(-0.3, 1.2, 0.2);
-			// node.scale.set(0.3, 0.2, 0.3);
-			// node.lookAt(new THREE.Vector3(0, 1.5, 0.1));
-
-			// this.viewer.sceneVR.add(node);
-
-			this.menu = node;
-
-			// window.vrSlider = nSlider;
-			window.vrMenu = node;
-
+			if(this.menu) return;
+			this._createVRMenu();
 		}
 
+		_createVRMenu(){
+			const group = new Group();
+			group.name = 'vr-mode-menu';
+			group.visible = false;
+
+			// Fondo del panel
+			const bgMat = new MeshBasicMaterial({
+				color: 0x0d1b2e,
+				transparent: true,
+				opacity: 0.88,
+				side: DoubleSide,
+			});
+			const bg = new Mesh(new PlaneGeometry(0.64, 0.52), bgMat);
+			group.add(bg);
+
+			// Título
+			const title = new Potree.TextSprite('MODO DE VISIÓN');
+			title.scale.set(0.07, 0.07, 0.07);
+			title.position.set(0, 0.20, 0.002);
+			group.add(title);
+
+			// Botones — fila superior
+			const btnWalk = this._createMenuButton('Modo Paseo', 2);
+			btnWalk.position.set(-0.17, 0.04, 0.002);
+			group.add(btnWalk);
+
+			const btnGod = this._createMenuButton('Modo Dios', 1);
+			btnGod.position.set(0.17, 0.04, 0.002);
+			group.add(btnGod);
+
+			// Botón fila inferior — modo poner puntos (sin acción por ahora)
+			const btnPoints = this._createMenuButton('Activar Colocar\nde Puntos', 3);
+			btnPoints.position.set(0, -0.13, 0.002);
+			group.add(btnPoints);
+
+			this.menuButtons = [btnWalk, btnGod, btnPoints];
+			this.viewer.sceneVR.add(group);
+			this.menu = group;
+			window.vrMenu = group;
+		}
+
+		_createMenuButton(label, modeId){
+			const canvas = document.createElement('canvas');
+			canvas.width = 256;
+			canvas.height = 128;
+			this._drawButtonCanvas(canvas, label, false);
+
+			const tex = new CanvasTexture(canvas);
+			const mat = new MeshBasicMaterial({ map: tex, transparent: true });
+			const mesh = new Mesh(new PlaneGeometry(0.28, 0.14), mat);
+			mesh.userData = { modeId, label, canvas, tex, hovered: false };
+			return mesh;
+		}
+
+		_drawButtonCanvas(canvas, label, highlighted){
+			const ctx = canvas.getContext('2d');
+			ctx.clearRect(0, 0, 256, 128);
+			ctx.fillStyle = highlighted ? '#2255bb' : '#162538';
+			ctx.fillRect(0, 0, 256, 128);
+			ctx.strokeStyle = highlighted ? '#88ccff' : '#3a6090';
+			ctx.lineWidth = 5;
+			ctx.strokeRect(3, 3, 250, 122);
+			ctx.fillStyle = '#ffffff';
+			ctx.textAlign = 'center';
+			ctx.textBaseline = 'middle';
+
+			const lines = label.split('\n');
+			if(lines.length === 1){
+				ctx.font = 'bold 34px Arial, sans-serif';
+				ctx.fillText(label, 128, 64);
+			} else {
+				ctx.font = 'bold 26px Arial, sans-serif';
+				const lineH = 34;
+				const startY = 64 - ((lines.length - 1) * lineH) / 2;
+				lines.forEach((line, i) => ctx.fillText(line, 128, startY + i * lineH));
+			}
+		}
+
+
+		toggleMenu(){
+			if(!this.menu) return;
+			this.menu.visible = !this.menu.visible;
+			if(this.menu.visible){
+				this._positionMenuInFrontOfCamera();
+			}
+		}
+
+		_positionMenuInFrontOfCamera(){
+			const camVR = this.viewer.renderer.xr.getCamera(fakeCam);
+			const pos = new Vector3();
+			const dir = new Vector3();
+			camVR.getWorldPosition(pos);
+			camVR.getWorldDirection(dir);
+
+			const menuPos = pos.clone().addScaledVector(dir, 1.5);
+			menuPos.y -= 0.05;
+			this.menu.position.copy(menuPos);
+			this.menu.lookAt(pos);
+			console.log(`[VRMenu] cam=(${pos.x.toFixed(2)},${pos.y.toFixed(2)},${pos.z.toFixed(2)}) menu=(${menuPos.x.toFixed(2)},${menuPos.y.toFixed(2)},${menuPos.z.toFixed(2)})`);
+		}
+
+		_getRightController(){
+			for(const c of [this.cPrimary, this.cSecondary]){
+				if(c.inputSource && c.inputSource.handedness === 'right') return c;
+			}
+			return null;
+		}
 
 		toScene(vec){
 			let camVR = this.getCamera();
@@ -87727,15 +87821,21 @@ ENDSEC
 		}
 
 		onTriggerStart(controller){
-			this.triggered.add(controller);
-
-			if(this.triggered.size === 0){
-				this.setMode(this.mode_fly);
-			}else if(this.triggered.size === 1){
-				this.setMode(this.mode_translate);
-			}else if(this.triggered.size === 2){
-				this.setMode(this.mode_rotScale);
+			if(this.menu && this.menu.visible){
+				const hovered = this.menuButtons.find(btn => btn.userData.hovered);
+				if(hovered){
+					document.dispatchEvent(new CustomEvent('vr-mode-select', { detail: { mode: hovered.userData.modeId } }));
+				}
+				this.menu.visible = false;
+				return;
 			}
+
+			if(this.pointsMode){
+				this._placeVRPoint(controller);
+				return;
+			}
+
+			this.toggleMenu();
 		}
 
 		onTriggerEnd(controller){
@@ -87747,6 +87847,29 @@ ENDSEC
 				this.setMode(this.mode_translate);
 			}else if(this.triggered.size === 2){
 				this.setMode(this.mode_rotScale);
+			}
+		}
+
+		onSqueezeStart(controller){
+			if(this.pointsMode){
+				this._finishMeasurement();
+				return;
+			}
+
+			this.triggered.add(controller);
+			if(this.triggered.size === 1){
+				this.setMode(this.mode_translate);
+			}else if(this.triggered.size === 2){
+				this.setMode(this.mode_rotScale);
+			}
+		}
+
+		onSqueezeEnd(controller){
+			this.triggered.delete(controller);
+			if(this.triggered.size === 0){
+				this.setMode(this.mode_fly);
+			}else if(this.triggered.size === 1){
+				this.setMode(this.mode_translate);
 			}
 		}
 
@@ -87804,26 +87927,147 @@ ENDSEC
 			return camera;
 		}
 
+		_raycastPointClouds(controller){
+			const originVR = new Vector3();
+			const quat = new Quaternion();
+			controller.getWorldPosition(originVR);
+			controller.getWorldQuaternion(quat);
+
+			const dirVR = new Vector3(0, 0, -1).applyQuaternion(quat);
+			const originWorld = this.toScene(originVR);
+			const dirWorld = this.toScene(originVR.clone().add(dirVR)).sub(originWorld).normalize();
+
+			console.log('[VRPTS] ray origin=' + originWorld.x.toFixed(0) + ',' + originWorld.y.toFixed(0) + ',' + originWorld.z.toFixed(0) + ' pcs=' + this.viewer.scene.pointclouds.length);
+
+			const ray = new Ray(originWorld, dirWorld);
+			const tmp = new Vector3();
+			let bestPoint = null;
+			let bestPerp2 = Infinity;
+
+			for(const pc of this.viewer.scene.pointclouds){
+				const nodes = pc.nodesOnRay(pc.visibleNodes, ray);
+				console.log('[VRPTS] nodesOnRay=' + nodes.length + ' visibleNodes=' + pc.visibleNodes.length);
+				for(const node of nodes){
+					if(!node.sceneNode) continue;
+					const posAttr = node.sceneNode.geometry && node.sceneNode.geometry.attributes && node.sceneNode.geometry.attributes.position;
+					if(!posAttr) continue;
+					const mat = node.sceneNode.matrixWorld;
+					for(let i = 0; i < posAttr.count; i += 10){
+						tmp.fromBufferAttribute(posAttr, i).applyMatrix4(mat);
+						const dx = tmp.x - ray.origin.x;
+						const dy = tmp.y - ray.origin.y;
+						const dz = tmp.z - ray.origin.z;
+						const t = dx * ray.direction.x + dy * ray.direction.y + dz * ray.direction.z;
+						if(t <= 0) continue;
+						const perp2 = dx*dx + dy*dy + dz*dz - t*t;
+						if(perp2 < bestPerp2){ bestPerp2 = perp2; bestPoint = tmp.clone(); }
+					}
+				}
+			}
+
+			console.log('[VRPTS] raycast result=' + (bestPoint ? bestPoint.x.toFixed(0)+','+bestPoint.y.toFixed(0) : 'null'));
+			return bestPoint;
+		}
+
+		_ensureMeasurement(){
+			if(this.activeMeasurement) return;
+			console.log('[VRPTS] creando Potree.Measure...');
+			const m = new Potree.Measure();
+			m.name = 'VR Puntos';
+			m.showDistances = true;
+			m.showArea = false;
+			m.showCoordinates = false;
+			m.showHeight = false;
+			m.showAngles = false;
+			m.showCircle = false;
+			m.showAzimuth = false;
+			m.showEdges = true;
+			m.closed = false;
+			m.maxMarkers = Infinity;
+			this.viewer.scene.addMeasurement(m);
+			this.activeMeasurement = m;
+		}
+
+		_placeVRPoint(controller){
+			const pos = this._raycastPointClouds(controller);
+			if(!pos) return;
+
+			this._ensureMeasurement();
+
+			// El último marker actual es el preview: lo fijamos en la posición confirmada
+			// y añadimos un nuevo marker que pasa a ser el nuevo preview.
+			const m = this.activeMeasurement;
+			if(m.points.length > 0){
+				m.setPosition(m.points.length - 1, pos);
+			}
+			m.addMarker(pos);
+		}
+
+		_updatePreviewMarker(controller){
+			if(!this.pointsMode || !controller) return;
+			const pos = this._raycastPointClouds(controller);
+			if(!pos) return;
+
+			this._ensureMeasurement();
+			const m = this.activeMeasurement;
+			if(m.points.length === 0){
+				m.addMarker(pos);
+			}else {
+				m.setPosition(m.points.length - 1, pos);
+			}
+		}
+
+		_finishMeasurement(){
+			if(this.activeMeasurement && this.activeMeasurement.points.length > 0){
+				// Eliminar el último marker (preview no confirmado)
+				this.activeMeasurement.removeMarker(this.activeMeasurement.points.length - 1);
+				// Si solo quedaban puntos preview y no se confirmó ninguno, eliminar la medición entera
+				if(this.activeMeasurement.points.length === 0){
+					this.viewer.scene.removeMeasurement(this.activeMeasurement);
+				}
+			}
+			this.activeMeasurement = null;
+			this.pointsMode = false;
+		}
+
 		update(delta){
 
-			
+			// Hover raycasting mientras el menú está abierto
+			const rightCtrl = this._getRightController();
+			if(this.menu && this.menu.visible && this.menuButtons.length > 0){
+				const pointer = rightCtrl || this.cPrimary;
+				if(pointer){
+					const origin = new Vector3();
+					const quat = new Quaternion();
+					pointer.getWorldPosition(origin);
+					pointer.getWorldQuaternion(quat);
+					const dir = new Vector3(0, 0, -1).applyQuaternion(quat);
+					this._menuRaycaster.set(origin, dir);
+					const hits = this._menuRaycaster.intersectObjects(this.menuButtons);
 
-			// if(this.mode === this.mode_fly){
-			// 	let ray = new THREE.Ray(origin, direction);
-				
-			// 	for(let object of this.selectables){
-
-			// 		if(object.intersectsRay(ray)){
-			// 			object.onHit(ray);
-			// 		}
-
-			// 	}
-
-			// }
+					for(const btn of this.menuButtons){
+						const hovered = hits.length > 0 && hits[0].object === btn;
+						if(btn.userData.hovered !== hovered){
+							btn.userData.hovered = hovered;
+							this._drawButtonCanvas(btn.userData.canvas, btn.userData.label, hovered);
+							btn.userData.tex.needsUpdate = true;
+						}
+					}
+				}
+			}
 
 			this.mode.update(this, delta);
 
-			
+			// Preview del modo Puntos: el último marker sigue al raycast del controlador derecho
+			if(this.pointsMode && !(this.menu && this.menu.visible)){
+				console.log('[VRPTS] preview tick');
+				try {
+					this._updatePreviewMarker(rightCtrl || this.cPrimary);
+					console.log('[VRPTS] preview ok');
+				} catch(e) {
+					console.log('[VRPTS] ERROR preview: ' + e.message + '\n' + (e.stack || ''));
+				}
+			}
 
 		}
 	};
