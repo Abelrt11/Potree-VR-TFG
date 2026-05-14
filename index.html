@@ -1,75 +1,247 @@
 <!DOCTYPE html>
 <html lang="en">
+<!-- RULES NOTICE: see /RULES.md for the assistant interaction rules.
+     Resumen clave aplicado a este archivo:
+     - No se escribirá código a menos que el autor lo solicite explícitamente; primero se propondrán opciones.
+     - El asistente evitará dar una respuesta final si su confianza estimada es menor al 95%; entonces propondrá comprobaciones o preguntas.
+     Estas reglas están documentadas en RULES.md en la raíz del repositorio. -->
 <head>
-	<meta charset="utf-8">
-	<meta name="description" content="">
-	<meta name="author" content="">
-	<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-	<title>Potree Viewer</title>
+  <meta charset="utf-8">
+  <meta name="description" content="">
+  <meta name="author" content="">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+  <title>Potree Viewer</title>
 
-	<link rel="stylesheet" type="text/css" href="./build/potree/potree.css">
-	<link rel="stylesheet" type="text/css" href="./libs/jquery-ui/jquery-ui.min.css">
-	<link rel="stylesheet" type="text/css" href="./libs/openlayers3/ol.css">
-	<link rel="stylesheet" type="text/css" href="./libs/spectrum/spectrum.css">
-	<link rel="stylesheet" type="text/css" href="./libs/jstree/themes/mixed/style.css">
+  <link rel="stylesheet" type="text/css" href="../../build/potree/potree.css">
+  <link rel="stylesheet" type="text/css" href="../../libs/jquery-ui/jquery-ui.min.css">
+  <link rel="stylesheet" type="text/css" href="../../libs/openlayers3/ol.css">
+  <link rel="stylesheet" type="text/css" href="../../libs/spectrum/spectrum.css">
+  <link rel="stylesheet" type="text/css" href="../../libs/jstree/themes/mixed/style.css">
 </head>
 
 <body>
-	<script src="./libs/jquery/jquery-3.1.1.min.js"></script>
-	<script src="./libs/spectrum/spectrum.js"></script>
-	<script src="./libs/jquery-ui/jquery-ui.min.js"></script>
-	
-	
-	<script src="./libs/other/BinaryHeap.js"></script>
-	<script src="./libs/tween/tween.min.js"></script>
-	<script src="./libs/d3/d3.js"></script>
-	<script src="./libs/proj4/proj4.js"></script>
-	<script src="./libs/openlayers3/ol.js"></script>
-	<script src="./libs/i18next/i18next.js"></script>
-	<script src="./libs/jstree/jstree.js"></script>
-	<script src="./build/potree/potree.js"></script>
-	<script src="./libs/plasio/js/laslaz.js"></script>
-	
-	<!-- INCLUDE ADDITIONAL DEPENDENCIES HERE -->
-	<!-- INCLUDE SETTINGS HERE -->
-	
-	<div class="potree_container" style="position: absolute; width: 100%; height: 100%; left: 0px; top: 0px; ">
-		<div id="potree_render_area" style="background-image: url('./build/potree/resources/images/background.jpg');"></div>
-		<div id="potree_sidebar_container"> </div>
-	</div>
-	
-	<script type="module">
+<script src="../../libs/jquery/jquery-3.1.1.min.js"></script>
+<script src="../../libs/spectrum/spectrum.js"></script>
+<script src="../../libs/jquery-ui/jquery-ui.min.js"></script>
+<script src="../../libs/other/BinaryHeap.js"></script>
+<script src="../../libs/tween/tween.min.js"></script>
+<script src="../../libs/d3/d3.js"></script>
+<script src="../../libs/proj4/proj4.js"></script>
+<script src="../../libs/openlayers3/ol.js"></script>
+<script src="../../libs/i18next/i18next.js"></script>
+<script src="../../libs/jstree/jstree.js"></script>
+<script src="../../build/potree/potree.js"></script>
+<script src="../../libs/plasio/js/laslaz.js"></script>
 
-	import * as THREE from "./libs/three.js/build/three.module.js";
 
-		window.viewer = new Potree.Viewer(document.getElementById("potree_render_area"));
-		viewer.renderer.xr.enabled = true;
-		viewer.setEDLEnabled(true);
-		viewer.setFOV(60);
-		viewer.setPointBudget(1_000_000);
-		viewer.loadSettingsFromURL();
+<div class="potree_container" style="position: absolute; width: 100%; height: 100%; left: 0px; top: 0px; ">
+  <div id="potree_render_area" style="background-image: url('../../build/potree/resources/images/background.jpg');">
 
-		viewer.setDescription("");
-		
-		viewer.loadGUI(() => {
-			viewer.setLanguage('en');
-			$("#menu_appearance").next().show();
-			//viewer.toggleSidebar();
-		});
+  </div>
+  <div id="potree_sidebar_container"> </div>
+</div>
 
-		// Lion
-		Potree.loadPointCloud("./pointclouds/lion_takanawa/cloud.js", "lion", function(e){
-			viewer.scene.addPointCloud(e.pointcloud);
-			
-			let material = e.pointcloud.material;
-			material.size = 1;
-			material.pointSizeType = Potree.PointSizeType.ADAPTIVE;
-			
-			viewer.fitToScreen();
-		});
-		
-	</script>
-	
-	
-  </body>
+<script type="module">
+  import * as THREE from "../libs/three.js/build/three.module.js";
+  import * as VR_Cosas from "../libs/three.js/libs/motion-controllers.module.js";
+  // ===== Log overlay (DOM) - muestra logs en pantalla para depuración en VR =====
+  function createLogOverlay(){
+    const overlay = document.createElement('div');
+    overlay.id = 'log_overlay';
+    Object.assign(overlay.style, {
+      position: 'fixed',
+      right: '12px',
+      bottom: '12px',
+      width: '360px',
+      maxHeight: '40vh',
+      overflowY: 'auto',
+      background: 'rgba(0,0,0,0.75)',
+      color: '#88ff88',
+      fontFamily: 'monospace',
+      fontSize: '12px',
+      padding: '8px',
+      zIndex: '2147483647',
+      borderRadius: '6px',
+      boxShadow: '0 2px 8px rgba(0,0,0,0.5)'
+    });
+    // Allow clicks when testing (so you can copy text etc.)
+    overlay.addEventListener('pointerdown', (e) => { e.stopPropagation(); });
+    document.body.appendChild(overlay);
+    return overlay;
+  }
+
+  const logOverlay = createLogOverlay();
+
+  function safeStringify(v){
+    try { if (typeof v === 'object') return JSON.stringify(v); } catch(e) { return String(v); }
+    return String(v);
+  }
+
+  function appendLog(msg, level='log'){
+    const line = document.createElement('div');
+    const ts = new Date().toISOString().substr(11,8);
+    line.textContent = `[${ts}] ${msg}`;
+    if(level === 'error') line.style.color = '#ff8080';
+    else if(level === 'warn') line.style.color = '#ffd480';
+    line.style.whiteSpace = 'pre-wrap';
+    logOverlay.appendChild(line);
+    // limit history
+    while(logOverlay.childNodes.length > 300) logOverlay.removeChild(logOverlay.firstChild);
+    logOverlay.scrollTop = logOverlay.scrollHeight;
+  }
+
+  // Solo muestra console.log en el overlay; warn/error van solo a la consola del navegador
+  (function(){
+    const _log = console.log.bind(console);
+    console.log = function(...args){ _log(...args); appendLog(args.map(safeStringify).join(' ')); };
+    window.clearLogOverlay = function(){ logOverlay.innerHTML = ''; };
+  })();
+
+  let viewmode = 2;
+
+  window.viewer = new Potree.Viewer(document.getElementById("potree_render_area"));
+  viewer.renderer.xr.enabled = true;
+  viewer.renderer.xr.setReferenceSpaceType('local-floor');
+  viewer.setEDLEnabled(true);
+  viewer.setFOV(60);  // FOV más amplio para sensación más inmersiva
+  viewer.setPointBudget(10_000_000);
+
+  viewer.setDescription(`Walker Mode: Experience the point cloud from ground level.
+            Use arrow keys or mouse to navigate. <br>
+            Point cloud courtesy of <a href="http://www.helimap.com/">Helimap System SA</a>.`);
+
+  viewer.loadGUI(() => {
+    viewer.setLanguage('en');
+    $("#menu_appearance").next().show();
+    viewer.toggleSidebar();
+  });
+  loadCloudMode(viewmode);
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "2") {
+      changeViewmode();
+    }
+    if (e.key === "1") {
+      if (viewer.vrControls) viewer.vrControls.toggleMenu();
+      else console.log("[VRMenu] vrControls no disponible aún");
+    }
+  });
+  
+
+  
+  
+  
+  
+  // Recibe la selección de modo desde el menú VR de VRControls
+  document.addEventListener('vr-mode-select', (e) => {
+    if(e.detail.mode === 3) return; // modo puntos: no recargar la nube
+    viewmode = e.detail.mode;
+    loadCloudMode(viewmode);
+  });
+
+  /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+  function changeViewmode() {
+    viewmode = viewmode === 1 ? 2 : 1;
+    console.log("viewmode", viewmode);
+    loadCloudMode(viewmode);
+  }
+  function clearPointClouds() {
+    for (const pc of viewer.scene.pointclouds.slice()) {
+      viewer.scene.scenePointCloud.remove(pc);
+    }
+    viewer.scene.pointclouds.length = 0;
+  }
+
+  function syncVRToScene() {
+    if (viewer.renderer.xr.isPresenting && viewer.vrControls) {
+      viewer.vrControls.onStart();
+    }
+  }
+
+  function loadCloudMode(viewmode) {
+    clearPointClouds();
+    switch (viewmode) {
+
+      case 1: //Aerial mode
+        Potree.loadPointCloud("/pointclouds/ejemplos_del_profe/ejemplo1/metadata.json").then(e => {
+          let pointcloud = e.pointcloud;
+          let material = e.pointcloud.material;
+          material.size = 1;
+          material.pointSizeType = Potree.PointSizeType.ADAPTIVE;
+          viewer.scene.addPointCloud(pointcloud);
+
+          // Forzar que matrixWorld esté actualizado antes de transformar el bbox
+          pointcloud.updateMatrixWorld(true);
+
+          // Transformar el boundingBox local de la nube a coordenadas mundo (UTM)
+          let bbox = pointcloud.boundingBox.clone();
+          bbox.applyMatrix4(pointcloud.matrixWorld);
+
+          let center = bbox.getCenter(new THREE.Vector3());
+          let size = bbox.getSize(new THREE.Vector3());
+          let distance = Math.max(size.x, size.y, size.z) * 1.2;
+
+          console.log(`[God] center=(${center.x.toFixed(0)},${center.y.toFixed(0)},${center.z.toFixed(0)}) size=(${size.x.toFixed(0)},${size.y.toFixed(0)},${size.z.toFixed(0)}) dist=${distance.toFixed(0)}`);
+
+          // Cámara diagonal arriba/atrás (Z = arriba en este sistema)
+          let camPos = new THREE.Vector3(
+            center.x + distance,
+            center.y - distance,
+            center.z + distance
+          );
+          viewer.scene.view.position.copy(camPos);
+          viewer.scene.view.lookAt(center);
+
+          viewer.scene.getActiveCamera().near = Math.max(0.1, distance / 1000);
+          viewer.scene.getActiveCamera().far = distance * 20;
+          viewer.scene.getActiveCamera().updateProjectionMatrix();
+
+          viewer.setMoveSpeed(distance / 5);
+          syncVRToScene();
+        });
+
+        break;
+      case 2: //walker mode
+        viewer.setControls(new Potree.FirstPersonControls(viewer));
+        Potree.loadPointCloud("/pointclouds/ejemplos_del_profe/ejemplo1/metadata.json").then(e => {
+          let pointcloud = e.pointcloud;
+          let material = e.pointcloud.material;
+          material.size = 0.5;
+          material.pointSizeType = Potree.PointSizeType.ADAPTIVE;
+          viewer.scene.addPointCloud(pointcloud);
+          pointcloud.scale.set(10, 10, 10);
+          pointcloud.updateMatrix();
+
+          let bbox = pointcloud.boundingBox;
+          let size = bbox.getSize(new THREE.Vector3());
+
+          viewer.scene.getActiveCamera().near = 0.1;
+          viewer.scene.getActiveCamera().far = Math.max(size.x, size.y, size.z) * 10;
+          viewer.scene.getActiveCamera().updateProjectionMatrix();
+
+          let camPos = new THREE.Vector3(426808.02, 4478030.49, 1034.87 + 20.7);
+          viewer.scene.view.position.copy(camPos);
+
+          let lookAtPos = camPos.clone();
+          lookAtPos.y += 1;
+          viewer.scene.view.lookAt(lookAtPos);
+          viewer.setMoveSpeed(10);
+          syncVRToScene();
+        });
+
+        break;
+    }
+  }
+
+</script>
+
+
+</body>
 </html>

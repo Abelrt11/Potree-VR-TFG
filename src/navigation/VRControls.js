@@ -512,12 +512,12 @@ export class VRControls extends EventDispatcher{
 		btnWalk.position.set(-0.17, 0.04, 0.002);
 		group.add(btnWalk);
 
-		const btnGod = this._createMenuButton('Modo Dios', 1);
+		const btnGod = this._createMenuButton('Modo Aéreo', 1);
 		btnGod.position.set(0.17, 0.04, 0.002);
 		group.add(btnGod);
 
 		// Botón fila inferior — modo poner puntos (sin acción por ahora)
-		const btnPoints = this._createMenuButton('Activar Colocar\nde Puntos', 3);
+		const btnPoints = this._createMenuButton('Activar Colocar\n medidas', 3);
 		btnPoints.position.set(0, -0.13, 0.002);
 		group.add(btnPoints);
 
