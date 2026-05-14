@@ -412,6 +412,7 @@ export class Utils {
 
 		pickParams.x = mouse.x;
 		pickParams.y = renderer.domElement.clientHeight - mouse.y;
+		pickParams.pickWindowSize = 7;
 
 		let raycaster = new THREE.Raycaster();
 		raycaster.setFromCamera(nmouse, camera);
