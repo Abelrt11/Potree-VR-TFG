@@ -210,7 +210,7 @@
         break;
       case 2: //walker mode
         viewer.setControls(new Potree.FirstPersonControls(viewer));
-        Potree.loadPointCloud("https://1024terabox.com/s/1aNFEY-2clXEqoDO4tKqPew").then(e => {
+        Potree.loadPointCloud("../pointclouds/ejemplos_del_profe/ejemplo1/metadata.json").then(e => {
           let pointcloud = e.pointcloud;
           let material = e.pointcloud.material;
           material.size = 0.5;
