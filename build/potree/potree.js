@@ -66354,6 +66354,7 @@ void main() {
 							'content-type': 'multipart/byteranges',
 							'Range': `bytes=${first}-${last}`,
 						},
+						cache: 'no-store',
 					});
 
 					buffer = await response.arrayBuffer();
@@ -66558,6 +66559,7 @@ void main() {
 					'content-type': 'multipart/byteranges',
 					'Range': `bytes=${first}-${last}`,
 				},
+				cache: 'no-store',
 			});
 
 

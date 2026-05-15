@@ -170,7 +170,7 @@
     switch (viewmode) {
 
       case 1: //Aerial mode
-        Potree.loadPointCloud("/pointclouds/ejemplos_del_profe/ejemplo1/metadata.json").then(e => {
+        Potree.loadPointCloud("https://pub-e5dc5ebf430a493e98528ece772092b4.r2.dev/ejemplo1/metadata.json").then(e => {
           let pointcloud = e.pointcloud;
           let material = e.pointcloud.material;
           material.size = 1;
@@ -210,7 +210,7 @@
         break;
       case 2: //walker mode
         viewer.setControls(new Potree.FirstPersonControls(viewer));
-        Potree.loadPointCloud("/pointclouds/ejemplos_del_profe/ejemplo1/metadata.json").then(e => {
+        Potree.loadPointCloud("https://pub-e5dc5ebf430a493e98528ece772092b4.r2.dev/ejemplo1/metadata.json").then(e => {
           let pointcloud = e.pointcloud;
           let material = e.pointcloud.material;
           material.size = 0.5;

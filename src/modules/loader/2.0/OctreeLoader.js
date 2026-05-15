@@ -51,6 +51,7 @@ export class NodeLoader{
 						'content-type': 'multipart/byteranges',
 						'Range': `bytes=${first}-${last}`,
 					},
+					cache: 'no-store',
 				});
 
 				buffer = await response.arrayBuffer();
@@ -255,6 +256,7 @@ export class NodeLoader{
 				'content-type': 'multipart/byteranges',
 				'Range': `bytes=${first}-${last}`,
 			},
+			cache: 'no-store',
 		});
 
 
