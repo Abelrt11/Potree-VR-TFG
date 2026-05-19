@@ -300,8 +300,10 @@ export class VRControls extends EventDispatcher{
 			this.viewer.sceneVR.add(light)
 		}
 
-		this.menu = null;
-		this.menuButtons = [];
+		this.mainMenu = null;
+		this.appearanceMenu = null;
+		this.activeMenu = null;
+		this._dragging = null;
 		this._menuRaycaster = new THREE.Raycaster();
 
 		const controllerModelFactory = new XRControllerModelFactory();
@@ -333,7 +335,7 @@ export class VRControls extends EventDispatcher{
 			this.viewer.sceneVR.add(controller);
 
 			{ // ADD LINE
-				
+
 				let lineGeometry = new LineGeometry();
 
 				lineGeometry.setPositions([
@@ -341,15 +343,16 @@ export class VRControls extends EventDispatcher{
 					0, 0, 0.05,
 				]);
 
-				let lineMaterial = new LineMaterial({ 
-					color: 0xff0000, 
-					linewidth: 2, 
+				let lineMaterial = new LineMaterial({
+					color: 0xff0000,
+					linewidth: 2,
 					resolution:  new THREE.Vector2(1000, 1000),
 				});
 
 				const line = new Line2(lineGeometry, lineMaterial);
-				
+
 				controller.add(line);
+				this._lineGeoPrimary = lineGeometry;
 			}
 
 
@@ -386,7 +389,7 @@ export class VRControls extends EventDispatcher{
 			this.viewer.sceneVR.add(controller);
 
 			{ // ADD LINE
-				
+
 				let lineGeometry = new LineGeometry();
 
 				lineGeometry.setPositions([
@@ -394,15 +397,16 @@ export class VRControls extends EventDispatcher{
 					0, 0, 0.05,
 				]);
 
-				let lineMaterial = new LineMaterial({ 
-					color: 0xff0000, 
-					linewidth: 2, 
+				let lineMaterial = new LineMaterial({
+					color: 0xff0000,
+					linewidth: 2,
 					resolution:  new THREE.Vector2(1000, 1000),
 				});
 
 				const line = new Line2(lineGeometry, lineMaterial);
-				
+
 				controller.add(line);
+				this._lineGeoSecondary = lineGeometry;
 			}
 
 			controller.addEventListener( 'connected', (event) => {
@@ -482,8 +486,9 @@ export class VRControls extends EventDispatcher{
 	}
 
 	initMenu(controller){
-		if(this.menu) return;
+		if(this.mainMenu) return;
 		this._createVRMenu();
+		this._createAppearanceMenu();
 	}
 
 	_createVRMenu(){
@@ -491,39 +496,42 @@ export class VRControls extends EventDispatcher{
 		group.name = 'vr-mode-menu';
 		group.visible = false;
 
-		// Fondo del panel
+		// Fondo del panel (ampliado para 4 botones)
 		const bgMat = new THREE.MeshBasicMaterial({
 			color: 0x0d1b2e,
 			transparent: true,
 			opacity: 0.88,
 			side: THREE.DoubleSide,
 		});
-		const bg = new THREE.Mesh(new THREE.PlaneGeometry(0.64, 0.52), bgMat);
+		const bg = new THREE.Mesh(new THREE.PlaneGeometry(0.64, 0.58), bgMat);
 		group.add(bg);
 
 		// Título
 		const title = new Potree.TextSprite('MODO DE VISIÓN');
 		title.scale.set(0.07, 0.07, 0.07);
-		title.position.set(0, 0.20, 0.002);
+		title.position.set(0, 0.23, 0.002);
 		group.add(title);
 
-		// Botones — fila superior
+		// Grid 2×2: Paseo | Dios / Colocar | Apariencia
 		const btnWalk = this._createMenuButton('Modo Paseo', 2);
-		btnWalk.position.set(-0.17, 0.04, 0.002);
+		btnWalk.position.set(-0.17, 0.07, 0.002);
 		group.add(btnWalk);
 
 		const btnGod = this._createMenuButton('Modo Dios', 1);
-		btnGod.position.set(0.17, 0.04, 0.002);
+		btnGod.position.set(0.17, 0.07, 0.002);
 		group.add(btnGod);
 
-		// Botón fila inferior — modo poner puntos (sin acción por ahora)
 		const btnPoints = this._createMenuButton('Activar Colocar\nde Puntos', 3);
-		btnPoints.position.set(0, -0.13, 0.002);
+		btnPoints.position.set(-0.17, -0.10, 0.002);
 		group.add(btnPoints);
 
-		this.menuButtons = [btnWalk, btnGod, btnPoints];
+		const btnAppearance = this._createMenuButton('Apariencia', 'OPEN_APPEARANCE');
+		btnAppearance.position.set(0.17, -0.10, 0.002);
+		group.add(btnAppearance);
+
+		group.userData.interactives = [btnWalk, btnGod, btnPoints, btnAppearance];
 		this.viewer.sceneVR.add(group);
-		this.menu = group;
+		this.mainMenu = group;
 		window.vrMenu = group;
 	}
 
@@ -536,7 +544,10 @@ export class VRControls extends EventDispatcher{
 		const tex = new THREE.CanvasTexture(canvas);
 		const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true });
 		const mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.28, 0.14), mat);
-		mesh.userData = { modeId, label, canvas, tex, hovered: false };
+		mesh.userData = {
+			modeId, label, canvas, tex, hovered: false,
+			redraw: (h) => { this._drawButtonCanvas(canvas, label, h); tex.needsUpdate = true; },
+		};
 		return mesh;
 	}
 
@@ -565,15 +576,145 @@ export class VRControls extends EventDispatcher{
 	}
 
 
+	_setLaserLength(long){
+		const far = long ? -3.0 : -0.15;
+		const positions = [0, 0, far, 0, 0, 0.05];
+		if(this._lineGeoPrimary) this._lineGeoPrimary.setPositions(positions);
+		if(this._lineGeoSecondary) this._lineGeoSecondary.setPositions(positions);
+	}
+
+	_createSmallButton(symbol){
+		const canvas = document.createElement('canvas');
+		canvas.width = 64; canvas.height = 64;
+		this._drawSmallButtonCanvas(canvas, symbol, false);
+		const tex = new THREE.CanvasTexture(canvas);
+		const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true });
+		const mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.045, 0.045), mat);
+		mesh.userData = {
+			symbol, canvas, tex, hovered: false,
+			redraw: (h) => { this._drawSmallButtonCanvas(canvas, symbol, h); tex.needsUpdate = true; },
+		};
+		return mesh;
+	}
+
+	_drawSmallButtonCanvas(canvas, symbol, highlighted){
+		const ctx = canvas.getContext('2d');
+		ctx.clearRect(0, 0, 64, 64);
+		ctx.fillStyle = highlighted ? '#2255bb' : '#162538';
+		ctx.fillRect(0, 0, 64, 64);
+		ctx.strokeStyle = highlighted ? '#88ccff' : '#3a6090';
+		ctx.lineWidth = 4;
+		ctx.strokeRect(2, 2, 60, 60);
+		ctx.fillStyle = '#ffffff';
+		ctx.textAlign = 'center';
+		ctx.textBaseline = 'middle';
+		ctx.font = 'bold 36px Arial, sans-serif';
+		ctx.fillText(symbol, 32, 32);
+	}
+
+	_drawRadioButtonCanvas(canvas, label, hovered, selected){
+		const ctx = canvas.getContext('2d');
+		const w = canvas.width, h = canvas.height;
+		ctx.clearRect(0, 0, w, h);
+		if(selected){
+			ctx.fillStyle = hovered ? '#2a6a2a' : '#1a4a1a';
+			ctx.strokeStyle = hovered ? '#66dd66' : '#44aa44';
+		} else {
+			ctx.fillStyle = hovered ? '#2255bb' : '#162538';
+			ctx.strokeStyle = hovered ? '#88ccff' : '#3a6090';
+		}
+		ctx.fillRect(0, 0, w, h);
+		ctx.lineWidth = 5;
+		ctx.strokeRect(3, 3, w - 6, h - 6);
+		ctx.fillStyle = '#ffffff';
+		ctx.textAlign = 'center';
+		ctx.textBaseline = 'middle';
+		ctx.font = 'bold 28px Arial, sans-serif';
+		ctx.fillText(label, w / 2, h / 2);
+	}
+
+	_createRadioGroupWidget({ options, getValue, setValue }){
+		const group = new THREE.Group();
+		const meshes = [];
+
+		const refreshAll = () => {
+			const current = getValue();
+			meshes.forEach(m => {
+				this._drawRadioButtonCanvas(m.userData.canvas, m.userData.label, m.userData.hovered, m.userData.radioValue === current);
+				m.userData.tex.needsUpdate = true;
+			});
+		};
+
+		// Fila única centrada si ≤2 opciones, 2×2 si hay más
+		const rowY = options.length <= 2 ? 0 : 0.06;
+		const positions = [
+			{ x: -0.16, y:  rowY },
+			{ x:  0.16, y:  rowY },
+			{ x: -0.16, y: -rowY },
+			{ x:  0.16, y: -rowY },
+		];
+
+		const initialValue = getValue();
+
+		options.forEach(({ label, value }, i) => {
+			const canvas = document.createElement('canvas');
+			canvas.width = 256;
+			canvas.height = 100;
+			this._drawRadioButtonCanvas(canvas, label, false, value === initialValue);
+			const tex = new THREE.CanvasTexture(canvas);
+			const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true });
+			const mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.26, 0.10), mat);
+			const pos = positions[i] || { x: 0, y: 0 };
+			mesh.position.set(pos.x, pos.y, 0.001);
+			mesh.userData = {
+				kind: 'radio',
+				radioValue: value,
+				label,
+				canvas,
+				tex,
+				hovered: false,
+				setValue: (v) => { setValue(v); refreshAll(); },
+				redraw: (h) => {
+					const current = getValue();
+					this._drawRadioButtonCanvas(canvas, label, h, value === current);
+					tex.needsUpdate = true;
+				},
+			};
+			meshes.push(mesh);
+			group.add(mesh);
+		});
+
+		refreshAll();
+		return { group, interactives: meshes, refreshAll };
+	}
+
 	toggleMenu(){
-		if(!this.menu) return;
-		this.menu.visible = !this.menu.visible;
-		if(this.menu.visible){
-			this._positionMenuInFrontOfCamera();
+		if(!this.mainMenu) return;
+		if(this.activeMenu){
+			this._hideAllMenus();
+		} else {
+			this._showMenu(this.mainMenu);
 		}
 	}
 
+	_hideAllMenus(){
+		if(this.mainMenu) this.mainMenu.visible = false;
+		if(this.appearanceMenu) this.appearanceMenu.visible = false;
+		this.activeMenu = null;
+		this._setLaserLength(false);
+	}
+
+	_showMenu(menu){
+		this._hideAllMenus();
+		if(!menu) return;
+		menu.visible = true;
+		this.activeMenu = menu;
+		this._positionMenuInFrontOfCamera();
+		this._setLaserLength(true);
+	}
+
 	_positionMenuInFrontOfCamera(){
+		if(!this.activeMenu) return;
 		const camVR = this.viewer.renderer.xr.getCamera(fakeCam);
 		const pos = new THREE.Vector3();
 		const dir = new THREE.Vector3();
@@ -582,9 +723,237 @@ export class VRControls extends EventDispatcher{
 
 		const menuPos = pos.clone().addScaledVector(dir, 1.5);
 		menuPos.y -= 0.05;
-		this.menu.position.copy(menuPos);
-		this.menu.lookAt(pos);
+		this.activeMenu.position.copy(menuPos);
+		this.activeMenu.lookAt(pos);
 		console.log(`[VRMenu] cam=(${pos.x.toFixed(2)},${pos.y.toFixed(2)},${pos.z.toFixed(2)}) menu=(${menuPos.x.toFixed(2)},${menuPos.y.toFixed(2)},${menuPos.z.toFixed(2)})`);
+	}
+
+	_createSliderWidget({label, min, max, step, getValue, setValue, valueFormat}){
+		valueFormat = valueFormat || ((v) => v.toFixed(0));
+
+		const group = new THREE.Group();
+
+		const labelSprite = new Potree.TextSprite(`${label}: ${valueFormat(getValue())}`);
+		labelSprite.scale.set(0.07, 0.07, 0.07);
+		labelSprite.position.set(0, 0.055, 0.001);
+		group.add(labelSprite);
+
+		const barMat = new THREE.MeshBasicMaterial({ color: 0x223344, side: THREE.DoubleSide });
+		const bar = new THREE.Mesh(new THREE.PlaneGeometry(0.40, 0.012), barMat);
+		bar.position.set(0, 0, 0.001);
+		group.add(bar);
+
+		const handleMat = new THREE.MeshBasicMaterial({ color: 0xdddddd, side: THREE.DoubleSide });
+		const handle = new THREE.Mesh(new THREE.PlaneGeometry(0.025, 0.040), handleMat);
+		handle.position.set(0, 0, 0.002);
+		handle.userData = {
+			role: 'handle', hovered: false,
+			redraw: (h) => { handle.material.color.set(h ? 0x88ccff : 0xdddddd); },
+		};
+		group.add(handle);
+
+		const btnMinus = this._createSmallButton('−');
+		btnMinus.position.set(-0.235, 0, 0.002);
+		btnMinus.userData.role = '-';
+		group.add(btnMinus);
+
+		const btnPlus = this._createSmallButton('+');
+		btnPlus.position.set(0.235, 0, 0.002);
+		btnPlus.userData.role = '+';
+		group.add(btnPlus);
+
+		const refreshUI = (value) => {
+			const v = Math.max(min, Math.min(max, value));
+			group.userData.currentValue = v;
+			const t = max > min ? (v - min) / (max - min) : 0;
+			handle.position.x = -0.2 + t * 0.4;
+			labelSprite.setText(`${label}: ${valueFormat(v)}`);
+		};
+
+		group.userData = {
+			kind: 'slider', min, max, step,
+			currentValue: getValue(),
+			getValue,
+			setValue: (v) => { setValue(v); refreshUI(v); },
+			refreshUI,
+		};
+
+		handle.userData.parentSlider = group;
+		btnMinus.userData.parentSlider = group;
+		btnPlus.userData.parentSlider = group;
+
+		refreshUI(getValue());
+
+		return { group, interactives: [handle, btnMinus, btnPlus] };
+	}
+
+	_createToggleWidget({label, getValue, setValue}){
+		const group = new THREE.Group();
+
+		const labelSprite = new Potree.TextSprite(label);
+		labelSprite.scale.set(0.07, 0.07, 0.07);
+		labelSprite.position.set(0.075, 0, 0.001);
+		group.add(labelSprite);
+
+		const canvas = document.createElement('canvas');
+		canvas.width = 64; canvas.height = 64;
+		const tex = new THREE.CanvasTexture(canvas);
+		const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, side: THREE.DoubleSide });
+		const box = new THREE.Mesh(new THREE.PlaneGeometry(0.04, 0.04), mat);
+		box.position.set(-0.075, 0, 0.001);
+		group.add(box);
+
+		const drawBox = (checked, hovered) => {
+			const ctx = canvas.getContext('2d');
+			ctx.clearRect(0, 0, 64, 64);
+			ctx.fillStyle = hovered ? '#2255bb' : '#162538';
+			ctx.fillRect(0, 0, 64, 64);
+			ctx.strokeStyle = hovered ? '#88ccff' : '#3a6090';
+			ctx.lineWidth = 4;
+			ctx.strokeRect(2, 2, 60, 60);
+			if(checked){
+				ctx.strokeStyle = '#88ff88';
+				ctx.lineWidth = 6;
+				ctx.beginPath();
+				ctx.moveTo(12, 32);
+				ctx.lineTo(28, 48);
+				ctx.lineTo(52, 16);
+				ctx.stroke();
+			}
+			tex.needsUpdate = true;
+		};
+
+		drawBox(getValue(), false);
+
+		let _checked = getValue();
+		box.userData = {
+			kind: 'toggle', hovered: false,
+			getValue,
+			setValue: (v) => { setValue(v); _checked = v; drawBox(v, box.userData.hovered); },
+			toggle:   ()  => { box.userData.setValue(!_checked); },
+			refreshUI: (v) => { _checked = v; drawBox(v, box.userData.hovered); },
+			redraw: (h) => { box.userData.hovered = h; drawBox(_checked, h); },
+		};
+
+		return { group, interactives: [box] };
+	}
+
+	_createAppearanceMenu(){
+		const group = new THREE.Group();
+		group.name = 'vr-appearance-menu';
+		group.visible = false;
+
+		const bgMat = new THREE.MeshBasicMaterial({
+			color: 0x0d1b2e, transparent: true, opacity: 0.88, side: THREE.DoubleSide,
+		});
+		const bg = new THREE.Mesh(new THREE.PlaneGeometry(0.80, 1.30), bgMat);
+		group.add(bg);
+
+		const title = new Potree.TextSprite('APARIENCIA');
+		title.scale.set(0.09, 0.09, 0.09);
+		title.position.set(0, 0.60, 0.002);
+		group.add(title);
+
+		const interactives = [];
+
+		// Slider: Point Budget
+		const sliderPB = this._createSliderWidget({
+			label: 'Point Budget',
+			min: 100000, max: 10000000, step: 100000,
+			getValue: () => this.viewer.getPointBudget(),
+			setValue: (v) => this.viewer.setPointBudget(v),
+			valueFormat: (v) => (v / 1000000).toFixed(1) + 'M',
+		});
+		sliderPB.group.position.set(0, 0.45, 0.002);
+		group.add(sliderPB.group);
+		interactives.push(...sliderPB.interactives);
+
+		// Slider: FOV
+		const sliderFOV = this._createSliderWidget({
+			label: 'FOV',
+			min: 20, max: 100, step: 1,
+			getValue: () => this.viewer.getFOV(),
+			setValue: (v) => this.viewer.setFOV(v),
+			valueFormat: (v) => v.toFixed(0) + '°',
+		});
+		sliderFOV.group.position.set(0, 0.32, 0.002);
+		group.add(sliderFOV.group);
+		interactives.push(...sliderFOV.interactives);
+
+		// Sección: Fondo
+		const fondoLabel = new Potree.TextSprite('FONDO');
+		fondoLabel.scale.set(0.07, 0.07, 0.07);
+		fondoLabel.position.set(0, 0.19, 0.002);
+		group.add(fondoLabel);
+
+		const radioFondo = this._createRadioGroupWidget({
+			options: [
+				{ label: 'Skybox',    value: 'skybox'   },
+				{ label: 'Degradado', value: 'gradient' },
+				{ label: 'Negro',     value: 'black'    },
+				{ label: 'Blanco',    value: 'white'    },
+			],
+			getValue: () => this.viewer.getBackground(),
+			setValue: (v) => this.viewer.setBackground(v),
+		});
+		radioFondo.group.position.set(0, 0.03, 0.002);
+		group.add(radioFondo.group);
+		interactives.push(...radioFondo.interactives);
+
+		// Sección: Calidad Splat
+		const qualityLabel = new Potree.TextSprite('CALIDAD SPLAT');
+		qualityLabel.scale.set(0.07, 0.07, 0.07);
+		qualityLabel.position.set(0, -0.14, 0.002);
+		group.add(qualityLabel);
+
+		const radioQuality = this._createRadioGroupWidget({
+			options: [
+				{ label: 'Standard',     value: 'standard' },
+				{ label: 'High Quality', value: 'hq'       },
+			],
+			getValue: () => this.viewer.useHQ ? 'hq' : 'standard',
+			setValue: (v) => { this.viewer.useHQ = (v === 'hq'); },
+		});
+		radioQuality.group.position.set(0, -0.24, 0.002);
+		group.add(radioQuality.group);
+		interactives.push(...radioQuality.interactives);
+
+		// Slider: Tamaño de Nodo
+		const sliderNodeSize = this._createSliderWidget({
+			label: 'Tam. Nodo',
+			min: 0, max: 100, step: 1,
+			getValue: () => this.viewer.getMinNodeSize(),
+			setValue: (v) => this.viewer.setMinNodeSize(v),
+			valueFormat: (v) => v.toFixed(0),
+		});
+		sliderNodeSize.group.position.set(0, -0.40, 0.002);
+		group.add(sliderNodeSize.group);
+		interactives.push(...sliderNodeSize.interactives);
+
+		// Botón Volver
+		const btnBack = this._createMenuButton('← Volver', 'BACK_TO_MAIN');
+		btnBack.position.set(0, -0.55, 0.002);
+		group.add(btnBack);
+		interactives.push(btnBack);
+
+		group.userData.interactives = interactives;
+
+		// Sincronización viewer → UI
+		this.viewer.addEventListener('point_budget_changed', () => {
+			sliderPB.group.userData.refreshUI(this.viewer.getPointBudget());
+		});
+		this.viewer.addEventListener('fov_changed', () => {
+			sliderFOV.group.userData.refreshUI(this.viewer.getFOV());
+		});
+		this.viewer.addEventListener('background_changed', () => {
+			radioFondo.refreshAll();
+		});
+		this.viewer.addEventListener('minnodesize_changed', () => {
+			sliderNodeSize.group.userData.refreshUI(this.viewer.getMinNodeSize());
+		});
+
+		this.viewer.sceneVR.add(group);
+		this.appearanceMenu = group;
 	}
 
 	_getRightController(){
@@ -638,12 +1007,68 @@ export class VRControls extends EventDispatcher{
 	}
 
 	onTriggerStart(controller){
-		if(this.menu && this.menu.visible){
-			const hovered = this.menuButtons.find(btn => btn.userData.hovered);
+		if(this.activeMenu && this.activeMenu.visible){
+			const interactives = this.activeMenu.userData.interactives ?? [];
+			const hovered = interactives.find(btn => btn.userData.hovered);
+
 			if(hovered){
-				document.dispatchEvent(new CustomEvent('vr-mode-select', { detail: { mode: hovered.userData.modeId } }));
+				const ud = hovered.userData;
+
+				// Modo estándar de visión (numérico)
+				if(typeof ud.modeId === 'number'){
+					document.dispatchEvent(new CustomEvent('vr-mode-select', { detail: { mode: ud.modeId } }));
+					this._hideAllMenus();
+					return;
+				}
+
+				// Navegación entre menús
+				if(ud.modeId === 'OPEN_APPEARANCE'){
+					this._showMenu(this.appearanceMenu);
+					return;
+				}
+				if(ud.modeId === 'BACK_TO_MAIN'){
+					this._showMenu(this.mainMenu);
+					return;
+				}
+
+				// Handle de slider → iniciar drag
+				if(ud.role === 'handle'){
+					const slider = ud.parentSlider;
+					const normal = new THREE.Vector3();
+					this.activeMenu.getWorldDirection(normal);
+					const origin = new THREE.Vector3();
+					hovered.getWorldPosition(origin);
+					this._dragging = {
+						slider,
+						plane: new THREE.Plane().setFromNormalAndCoplanarPoint(normal, origin),
+					};
+					return;
+				}
+
+				// Botones +/−
+				if(ud.role === '+' || ud.role === '-'){
+					const sUd = ud.parentSlider.userData;
+					const delta = ud.role === '+' ? sUd.step : -sUd.step;
+					const newVal = Math.max(sUd.min, Math.min(sUd.max, sUd.currentValue + delta));
+					sUd.setValue(newVal);
+					return;
+				}
+
+				// Toggle
+				if(ud.kind === 'toggle'){
+					ud.toggle();
+					return;
+				}
+
+				// Radio button (selección de fondo, etc.)
+				if(ud.kind === 'radio'){
+					ud.setValue(ud.radioValue);
+					return;
+				}
 			}
-			this.menu.visible = false;
+
+			// Click fuera de cualquier widget → cerrar menú
+			this._hideAllMenus();
 			return;
 		}
 
@@ -656,6 +1081,12 @@ export class VRControls extends EventDispatcher{
 	}
 
 	onTriggerEnd(controller){
+		// Terminar drag si estaba activo
+		if(this._dragging){
+			this._dragging = null;
+			return;
+		}
+
 		this.triggered.delete(controller);
 
 		if(this.triggered.size === 0){
@@ -848,26 +1279,48 @@ export class VRControls extends EventDispatcher{
 	}
 
 	update(delta){
-
-		// Hover raycasting mientras el menú está abierto
 		const rightCtrl = this._getRightController();
-		if(this.menu && this.menu.visible && this.menuButtons.length > 0){
-			const pointer = rightCtrl || this.cPrimary;
-			if(pointer){
+		const pointer = rightCtrl || this.cPrimary;
+
+		// Drag de slider activo
+		if(this._dragging && pointer){
+			const origin = new THREE.Vector3();
+			const quat = new THREE.Quaternion();
+			pointer.getWorldPosition(origin);
+			pointer.getWorldQuaternion(quat);
+			const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(quat);
+			this._menuRaycaster.set(origin, dir);
+
+			const target = new THREE.Vector3();
+			if(this._menuRaycaster.ray.intersectPlane(this._dragging.plane, target)){
+				const slider = this._dragging.slider;
+				const sUd = slider.userData;
+				const localX = slider.worldToLocal(target.clone()).x;
+				const t = Math.max(0, Math.min(1, (localX + 0.2) / 0.4));
+				const raw = sUd.min + t * (sUd.max - sUd.min);
+				const stepped = Math.round(raw / sUd.step) * sUd.step;
+				const clamped = Math.max(sUd.min, Math.min(sUd.max, stepped));
+				sUd.setValue(clamped);
+			}
+		}
+
+		// Hover raycasting mientras un menú está abierto
+		if(this.activeMenu && this.activeMenu.visible){
+			const interactives = this.activeMenu.userData.interactives ?? [];
+			if(interactives.length > 0 && pointer){
 				const origin = new THREE.Vector3();
 				const quat = new THREE.Quaternion();
 				pointer.getWorldPosition(origin);
 				pointer.getWorldQuaternion(quat);
 				const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(quat);
 				this._menuRaycaster.set(origin, dir);
-				const hits = this._menuRaycaster.intersectObjects(this.menuButtons);
+				const hits = this._menuRaycaster.intersectObjects(interactives);
 
-				for(const btn of this.menuButtons){
-					const hovered = hits.length > 0 && hits[0].object === btn;
-					if(btn.userData.hovered !== hovered){
-						btn.userData.hovered = hovered;
-						this._drawButtonCanvas(btn.userData.canvas, btn.userData.label, hovered);
-						btn.userData.tex.needsUpdate = true;
+				for(const btn of interactives){
+					const isHovered = hits.length > 0 && hits[0].object === btn;
+					if(btn.userData.hovered !== isHovered){
+						btn.userData.hovered = isHovered;
+						if(btn.userData.redraw) btn.userData.redraw(isHovered);
 					}
 				}
 			}
@@ -875,11 +1328,11 @@ export class VRControls extends EventDispatcher{
 
 		this.mode.update(this, delta);
 
-		// Preview del modo Puntos: el último marker sigue al raycast del controlador derecho
-		if(this.pointsMode && !(this.menu && this.menu.visible)){
+		// Preview del modo Puntos
+		if(this.pointsMode && !(this.activeMenu && this.activeMenu.visible)){
 			console.log('[VRPTS] preview tick');
 			try {
-				this._updatePreviewMarker(rightCtrl || this.cPrimary);
+				this._updatePreviewMarker(pointer);
 				console.log('[VRPTS] preview ok');
 			} catch(e) {
 				console.log('[VRPTS] ERROR preview: ' + e.message + '\n' + (e.stack || ''));

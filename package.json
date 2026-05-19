@@ -19,6 +19,7 @@
   "scripts": {
     "start": "gulp watch",
     "build": "gulp build pack",
+    "serve": "http-server -S -C cert.pem -K key.pem -p 1234 -c-1",
     "postinstall": "npm run build"
   },
   "dependencies": {
