@@ -785,7 +785,8 @@ export class PointCloudOctree extends PointCloudTree {
 		{ // update pick material
 			pickMaterial.pointSizeType = pointSizeType;
 			//pickMaterial.shape = this.material.shape;
-			pickMaterial.shape = Potree.PointShape.PARABOLOID;
+			// WebGL2 (p.ej. navegador de las Quest) no soporta gl_FragDepthEXT del shader paraboloide; SQUARE evita escribir frag depth y el picking sigue siendo correcto porque pick() lee índices de color, no profundidad.
+			pickMaterial.shape = Potree.PointShape.SQUARE;
 
 			pickMaterial.uniforms.uFilterReturnNumberRange.value = this.material.uniforms.uFilterReturnNumberRange.value;
 			pickMaterial.uniforms.uFilterNumberOfReturnsRange.value = this.material.uniforms.uFilterNumberOfReturnsRange.value;
