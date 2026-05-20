@@ -2067,6 +2067,41 @@ export class Viewer extends EventDispatcher{
 
 		}
 
+		{ // render measurements (VR overlay)
+			const mScene = this.measuringTool && this.measuringTool.scene;
+			if(mScene && this.scene.measurements.length > 0){
+				let mcam = makeCam();
+				mcam.position.z -= 0.8 * mcam.scale.x;
+				mcam.parent = null;
+				mcam.near = this.scene.getActiveCamera().near;
+				mcam.far = this.scene.getActiveCamera().far;
+				mcam.updateMatrix();
+				mcam.updateMatrixWorld();
+
+				mScene.updateMatrix();
+				mScene.updateMatrixWorld();
+				mScene.matrixAutoUpdate = false;
+
+				let mview = mcam.matrixWorld.clone().invert();
+				mScene.matrix.copy(mview);
+				mScene.matrixWorld.copy(mview);
+
+				mcam.matrix.identity();
+				mcam.matrixWorld.identity();
+				mcam.matrixWorldInverse.identity();
+
+				try {
+					renderer.render(mScene, mcam);
+				} catch(e) {
+					console.log('[VRMEAS] ERROR render: ' + e.message);
+				} finally {
+					mScene.matrix.identity();
+					mScene.matrixWorld.identity();
+					mScene.matrixAutoUpdate = true;
+				}
+			}
+		}
+
 		{ // render VR scene
 			let cam = makeCam();
 			cam.parent = null;

@@ -60904,7 +60904,8 @@ void main() {
 			{ // update pick material
 				pickMaterial.pointSizeType = pointSizeType;
 				//pickMaterial.shape = this.material.shape;
-				pickMaterial.shape = Potree.PointShape.PARABOLOID;
+				// WebGL2 (p.ej. navegador de las Quest) no soporta gl_FragDepthEXT del shader paraboloide; SQUARE evita escribir frag depth y el picking sigue siendo correcto porque pick() lee índices de color, no profundidad.
+				pickMaterial.shape = Potree.PointShape.SQUARE;
 
 				pickMaterial.uniforms.uFilterReturnNumberRange.value = this.material.uniforms.uFilterReturnNumberRange.value;
 				pickMaterial.uniforms.uFilterNumberOfReturnsRange.value = this.material.uniforms.uFilterNumberOfReturnsRange.value;
@@ -87485,6 +87486,7 @@ ENDSEC
 
 			this.mainMenu = null;
 			this.appearanceMenu = null;
+			this.measureMenu = null;
 			this.activeMenu = null;
 			this._dragging = null;
 			this._menuRaycaster = new Raycaster();
@@ -87613,6 +87615,7 @@ ENDSEC
 
 			this.pointsMode = false;
 			this.activeMeasurement = null;
+			this.measureType = 'distance';
 
 			document.addEventListener('vr-mode-select', (e) => {
 				if(e.detail.mode !== 3 && this.pointsMode) this._finishMeasurement();
@@ -87672,6 +87675,7 @@ ENDSEC
 			if(this.mainMenu) return;
 			this._createVRMenu();
 			this._createAppearanceMenu();
+			this._createMeasureMenu();
 		}
 
 		_createVRMenu(){
@@ -87700,11 +87704,11 @@ ENDSEC
 			btnWalk.position.set(-0.17, 0.07, 0.002);
 			group.add(btnWalk);
 
-			const btnGod = this._createMenuButton('Modo Dios', 1);
+			const btnGod = this._createMenuButton('Modo Aéreo', 1);
 			btnGod.position.set(0.17, 0.07, 0.002);
 			group.add(btnGod);
 
-			const btnPoints = this._createMenuButton('Activar Colocar\nde Puntos', 3);
+			const btnPoints = this._createMenuButton('Activar Colocar\nMedidas', 'OPEN_MEASURE');
 			btnPoints.position.set(-0.17, -0.10, 0.002);
 			group.add(btnPoints);
 
@@ -87883,6 +87887,7 @@ ENDSEC
 		_hideAllMenus(){
 			if(this.mainMenu) this.mainMenu.visible = false;
 			if(this.appearanceMenu) this.appearanceMenu.visible = false;
+			if(this.measureMenu) this.measureMenu.visible = false;
 			this.activeMenu = null;
 			this._setLaserLength(false);
 		}
@@ -88139,6 +88144,42 @@ ENDSEC
 			this.appearanceMenu = group;
 		}
 
+		_createMeasureMenu(){
+			const group = new Group();
+			group.name = 'vr-measure-menu';
+			group.visible = false;
+
+			const bgMat = new MeshBasicMaterial({
+				color: 0x0d1b2e,
+				transparent: true,
+				opacity: 0.88,
+				side: DoubleSide,
+			});
+			const bg = new Mesh(new PlaneGeometry(0.64, 0.58), bgMat);
+			group.add(bg);
+
+			const title = new Potree.TextSprite('MEDIDAS');
+			title.scale.set(0.07, 0.07, 0.07);
+			title.position.set(0, 0.21, 0.002);
+			group.add(title);
+
+			const btnDistance = this._createMenuButton('Medir Distancias', 'MEASURE_DISTANCE');
+			btnDistance.position.set(0, 0.07, 0.002);
+			group.add(btnDistance);
+
+			const btnHeight = this._createMenuButton('Medir Alturas', 'MEASURE_HEIGHT');
+			btnHeight.position.set(0, -0.08, 0.002);
+			group.add(btnHeight);
+
+			const btnBack = this._createMenuButton('← Volver', 'BACK_TO_MAIN');
+			btnBack.position.set(0, -0.22, 0.002);
+			group.add(btnBack);
+
+			group.userData.interactives = [btnDistance, btnHeight, btnBack];
+			this.viewer.sceneVR.add(group);
+			this.measureMenu = group;
+		}
+
 		_getRightController(){
 			for(const c of [this.cPrimary, this.cSecondary]){
 				if(c.inputSource && c.inputSource.handedness === 'right') return c;
@@ -88211,6 +88252,20 @@ ENDSEC
 					}
 					if(ud.modeId === 'BACK_TO_MAIN'){
 						this._showMenu(this.mainMenu);
+						return;
+					}
+
+					// Submenú de medidas
+					if(ud.modeId === 'OPEN_MEASURE'){
+						this._showMenu(this.measureMenu);
+						return;
+					}
+					if(ud.modeId === 'MEASURE_DISTANCE'){
+						this._startMeasureMode('distance');
+						return;
+					}
+					if(ud.modeId === 'MEASURE_HEIGHT'){
+						this._startMeasureMode('height');
 						return;
 					}
 
@@ -88400,21 +88455,34 @@ ENDSEC
 			return bestPoint;
 		}
 
+		_startMeasureMode(type){
+			if(this.pointsMode) this._finishMeasurement();
+			this.measureType = type;
+			document.dispatchEvent(new CustomEvent('vr-mode-select', { detail: { mode: 3 } }));
+			this._hideAllMenus();
+		}
+
 		_ensureMeasurement(){
 			if(this.activeMeasurement) return;
 			console.log('[VRPTS] creando Potree.Measure...');
 			const m = new Potree.Measure();
-			m.name = 'VR Puntos';
-			m.showDistances = true;
+			if(this.measureType === 'height'){
+				m.name = 'VR Altura';
+				m.showDistances = false;
+				m.showHeight = true;
+			}else {
+				m.name = 'VR Puntos';
+				m.showDistances = true;
+				m.showHeight = false;
+			}
 			m.showArea = false;
 			m.showCoordinates = false;
-			m.showHeight = false;
 			m.showAngles = false;
 			m.showCircle = false;
 			m.showAzimuth = false;
 			m.showEdges = true;
 			m.closed = false;
-			m.maxMarkers = Infinity;
+			m.maxMarkers = (this.measureType === 'height') ? 2 : Infinity;
 			this.viewer.scene.addMeasurement(m);
 			this.activeMeasurement = m;
 		}
@@ -90734,6 +90802,41 @@ ENDSEC
 					viewOverride: vrView,
 				});
 
+			}
+
+			{ // render measurements (VR overlay)
+				const mScene = this.measuringTool && this.measuringTool.scene;
+				if(mScene && this.scene.measurements.length > 0){
+					let mcam = makeCam();
+					mcam.position.z -= 0.8 * mcam.scale.x;
+					mcam.parent = null;
+					mcam.near = this.scene.getActiveCamera().near;
+					mcam.far = this.scene.getActiveCamera().far;
+					mcam.updateMatrix();
+					mcam.updateMatrixWorld();
+
+					mScene.updateMatrix();
+					mScene.updateMatrixWorld();
+					mScene.matrixAutoUpdate = false;
+
+					let mview = mcam.matrixWorld.clone().invert();
+					mScene.matrix.copy(mview);
+					mScene.matrixWorld.copy(mview);
+
+					mcam.matrix.identity();
+					mcam.matrixWorld.identity();
+					mcam.matrixWorldInverse.identity();
+
+					try {
+						renderer.render(mScene, mcam);
+					} catch(e) {
+						console.log('[VRMEAS] ERROR render: ' + e.message);
+					} finally {
+						mScene.matrix.identity();
+						mScene.matrixWorld.identity();
+						mScene.matrixAutoUpdate = true;
+					}
+				}
 			}
 
 			{ // render VR scene
