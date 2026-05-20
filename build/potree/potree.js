@@ -66354,6 +66354,7 @@ void main() {
 							'content-type': 'multipart/byteranges',
 							'Range': `bytes=${first}-${last}`,
 						},
+						cache: 'no-store',
 					});
 
 					buffer = await response.arrayBuffer();
@@ -66558,6 +66559,7 @@ void main() {
 					'content-type': 'multipart/byteranges',
 					'Range': `bytes=${first}-${last}`,
 				},
+				cache: 'no-store',
 			});
 
 
@@ -87700,11 +87702,11 @@ ENDSEC
 			btnWalk.position.set(-0.17, 0.07, 0.002);
 			group.add(btnWalk);
 
-			const btnGod = this._createMenuButton('Modo Dios', 1);
+			const btnGod = this._createMenuButton('Modo Aéreo', 1);
 			btnGod.position.set(0.17, 0.07, 0.002);
 			group.add(btnGod);
 
-			const btnPoints = this._createMenuButton('Activar Colocar\nde Puntos', 3);
+			const btnPoints = this._createMenuButton('Activar Colocar\nMedidas', 3);
 			btnPoints.position.set(-0.17, -0.10, 0.002);
 			group.add(btnPoints);
 
