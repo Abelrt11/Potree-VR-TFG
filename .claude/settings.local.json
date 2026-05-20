@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(xargs grep -l \"vr-mode-select\")",
+      "Bash(xargs grep -l \"VR\\\\|menu\")",
+      "Bash(awk '/^.*update.*\\\\\\(delta.*timestamp/ {found=1; start=NR} found && NR<=start+200 {print NR\": \"$0} NR>start+200 {found=0}' build/potree/potree.js)",
+      "Bash(xargs grep -l \"sceneVR\\\\|scene.VR\")",
+      "Bash(npx gulp *)"
+    ]
+  }
+}
