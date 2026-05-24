@@ -87192,6 +87192,12 @@ ENDSEC
 
 	let fakeCam = new PerspectiveCamera();
 
+	// Paleta cíclica para cambiar el color de las clases en VR (sin color-picker).
+	const CLASS_COLOR_PALETTE = [
+		[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 1.0, 0.0],
+		[1.0, 0.0, 1.0], [0.0, 1.0, 1.0], [1.0, 0.5, 0.0], [1.0, 1.0, 1.0],
+	];
+
 	function toScene(vec, ref){
 		let node = ref.clone();
 		node.updateMatrix();
@@ -87487,6 +87493,8 @@ ENDSEC
 			this.mainMenu = null;
 			this.appearanceMenu = null;
 			this.measureMenu = null;
+			this.attributeMenu = null;
+			this._attributeRefresh = null;
 			this.activeMenu = null;
 			this._dragging = null;
 			this._menuRaycaster = new Raycaster();
@@ -87676,6 +87684,7 @@ ENDSEC
 			this._createVRMenu();
 			this._createAppearanceMenu();
 			this._createMeasureMenu();
+			this._createAttributeMenu();
 		}
 
 		_createVRMenu(){
@@ -87683,40 +87692,44 @@ ENDSEC
 			group.name = 'vr-mode-menu';
 			group.visible = false;
 
-			// Fondo del panel (ampliado para 4 botones)
+			// Fondo del panel (ampliado para 5 botones)
 			const bgMat = new MeshBasicMaterial({
 				color: 0x0d1b2e,
 				transparent: true,
 				opacity: 0.88,
 				side: DoubleSide,
 			});
-			const bg = new Mesh(new PlaneGeometry(0.64, 0.58), bgMat);
+			const bg = new Mesh(new PlaneGeometry(0.64, 0.74), bgMat);
 			group.add(bg);
 
 			// Título
 			const title = new Potree.TextSprite('MODO DE VISIÓN');
 			title.scale.set(0.07, 0.07, 0.07);
-			title.position.set(0, 0.23, 0.002);
+			title.position.set(0, 0.30, 0.002);
 			group.add(title);
 
-			// Grid 2×2: Paseo | Dios / Colocar | Apariencia
+			// Grid: Paseo | Aéreo / Medidas | Apariencia / Atributo (centrado)
 			const btnWalk = this._createMenuButton('Modo Paseo', 2);
-			btnWalk.position.set(-0.17, 0.07, 0.002);
+			btnWalk.position.set(-0.17, 0.15, 0.002);
 			group.add(btnWalk);
 
 			const btnGod = this._createMenuButton('Modo Aéreo', 1);
-			btnGod.position.set(0.17, 0.07, 0.002);
+			btnGod.position.set(0.17, 0.15, 0.002);
 			group.add(btnGod);
 
 			const btnPoints = this._createMenuButton('Activar Colocar\nMedidas', 'OPEN_MEASURE');
-			btnPoints.position.set(-0.17, -0.10, 0.002);
+			btnPoints.position.set(-0.17, 0.0, 0.002);
 			group.add(btnPoints);
 
 			const btnAppearance = this._createMenuButton('Apariencia', 'OPEN_APPEARANCE');
-			btnAppearance.position.set(0.17, -0.10, 0.002);
+			btnAppearance.position.set(0.17, 0.0, 0.002);
 			group.add(btnAppearance);
 
-			group.userData.interactives = [btnWalk, btnGod, btnPoints, btnAppearance];
+			const btnAttribute = this._createMenuButton('Atributo', 'OPEN_ATTRIBUTE');
+			btnAttribute.position.set(0, -0.16, 0.002);
+			group.add(btnAttribute);
+
+			group.userData.interactives = [btnWalk, btnGod, btnPoints, btnAppearance, btnAttribute];
 			this.viewer.sceneVR.add(group);
 			this.mainMenu = group;
 			window.vrMenu = group;
@@ -87888,6 +87901,7 @@ ENDSEC
 			if(this.mainMenu) this.mainMenu.visible = false;
 			if(this.appearanceMenu) this.appearanceMenu.visible = false;
 			if(this.measureMenu) this.measureMenu.visible = false;
+			if(this.attributeMenu) this.attributeMenu.visible = false;
 			this.activeMenu = null;
 			this._setLaserLength(false);
 		}
@@ -88180,6 +88194,169 @@ ENDSEC
 			this.measureMenu = group;
 		}
 
+		_createAttributeMenu(){
+			const group = new Group();
+			group.name = 'vr-attribute-menu';
+			group.visible = false;
+
+			const bgMat = new MeshBasicMaterial({
+				color: 0x0d1b2e, transparent: true, opacity: 0.88, side: DoubleSide,
+			});
+			const bg = new Mesh(new PlaneGeometry(0.85, 1.45), bgMat);
+			group.add(bg);
+
+			const title = new Potree.TextSprite('ATRIBUTO');
+			title.scale.set(0.08, 0.08, 0.08);
+			title.position.set(0, 0.64, 0.002);
+			group.add(title);
+
+			const radio = this._createRadioGroupWidget({
+				options: [
+					{ label: 'RGBA',          value: 'rgba'               },
+					{ label: 'Clasificación', value: 'classification'     },
+					{ label: 'Intensidad',    value: 'intensity gradient' },
+				],
+				getValue: () => this._getActiveAttribute(),
+				setValue: (v) => { this._applyAttribute(v); this._buildAttrControls(v); },
+			});
+			radio.group.position.set(0, 0.49, 0.002);
+			group.add(radio.group);
+			this._attributeRefresh = radio.refreshAll;
+
+			const btnBack = this._createMenuButton('← Volver', 'BACK_TO_MAIN');
+			btnBack.position.set(0, -0.66, 0.002);
+			group.add(btnBack);
+
+			// Región de controles que se reconstruye según el atributo seleccionado
+			this._attrControls = new Group();
+			group.add(this._attrControls);
+			this._attrRadioInteractives = radio.interactives;
+			this._attrBackBtn = btnBack;
+
+			group.userData.interactives = [...radio.interactives, btnBack];
+			this.viewer.sceneVR.add(group);
+			this.attributeMenu = group;
+		}
+
+		_buildAttrControls(attr){
+			const region = this._attrControls;
+			if(!region) return;
+			region.clear();
+			const interactives = [];
+
+			if(attr === 'rgba' || attr === 'intensity gradient'){
+				const p = (attr === 'rgba')
+					? { g: 'rgbGamma', b: 'rgbBrightness', c: 'rgbContrast' }
+					: { g: 'intensityGamma', b: 'intensityBrightness', c: 'intensityContrast' };
+				const mk = (label, prop, min, max, def) => this._createSliderWidget({
+					label, min, max, step: 0.01,
+					getValue: () => { const pc = this.viewer.scene.pointclouds[0]; return pc ? pc.material[prop] : def; },
+					setValue: (v) => { for(const pc of this.viewer.scene.pointclouds) pc.material[prop] = v; },
+					valueFormat: (v) => v.toFixed(2),
+				});
+				const rows = [
+					{ w: mk('Gamma',     p.g,  0, 4, 1), y:  0.28 },
+					{ w: mk('Brillo',    p.b, -1, 1, 0), y:  0.00 },
+					{ w: mk('Contraste', p.c, -1, 1, 0), y: -0.28 },
+				];
+				for(const { w, y } of rows){
+					w.group.position.set(0, y, 0.002);
+					region.add(w.group);
+					interactives.push(...w.interactives);
+				}
+			}else if(attr === 'classification'){
+				let y = 0.34;
+				for(const code of Object.keys(this.viewer.classifications)){
+					const row = this._createClassRow(code);
+					row.group.position.set(0, y, 0.002);
+					region.add(row.group);
+					interactives.push(...row.interactives);
+					y -= 0.086;
+				}
+			}
+
+			this.attributeMenu.userData.interactives = [...this._attrRadioInteractives, ...interactives, this._attrBackBtn];
+		}
+
+		_createClassRow(code){
+			const cls = this.viewer.classifications[code];
+			const group = new Group();
+
+			// Checkbox de visibilidad (kind 'toggle' → ya soportado por onTriggerStart)
+			const cbCanvas = document.createElement('canvas');
+			cbCanvas.width = 64; cbCanvas.height = 64;
+			const cbTex = new CanvasTexture(cbCanvas);
+			const cb = new Mesh(
+				new PlaneGeometry(0.06, 0.06),
+				new MeshBasicMaterial({ map: cbTex, transparent: true, side: DoubleSide }));
+			cb.position.set(-0.36, 0, 0.001);
+			const drawCb = (checked, hovered) => {
+				const ctx = cbCanvas.getContext('2d');
+				ctx.clearRect(0, 0, 64, 64);
+				ctx.fillStyle = hovered ? '#2255bb' : '#162538';
+				ctx.fillRect(0, 0, 64, 64);
+				ctx.strokeStyle = hovered ? '#88ccff' : '#3a6090';
+				ctx.lineWidth = 4; ctx.strokeRect(2, 2, 60, 60);
+				if(checked){
+					ctx.strokeStyle = '#88ff88'; ctx.lineWidth = 6;
+					ctx.beginPath(); ctx.moveTo(12, 32); ctx.lineTo(28, 48); ctx.lineTo(52, 16); ctx.stroke();
+				}
+				cbTex.needsUpdate = true;
+			};
+			drawCb(cls.visible, false);
+			cb.userData = {
+				kind: 'toggle', hovered: false,
+				toggle: () => {
+					const v = !this.viewer.classifications[code].visible;
+					this.viewer.setClassificationVisibility(code, v);
+					drawCb(v, cb.userData.hovered);
+				},
+				redraw: (h) => { cb.userData.hovered = h; drawCb(this.viewer.classifications[code].visible, h); },
+			};
+			group.add(cb);
+
+			const label = new Potree.TextSprite(cls.name || ('clase ' + code));
+			label.scale.set(0.135, 0.135, 0.135);
+			label.position.set(0, 0, 0.001);
+			group.add(label);
+
+			// Botón de color: cicla la paleta fija
+			const colMat = new MeshBasicMaterial({
+				color: new Color(cls.color[0], cls.color[1], cls.color[2]), side: DoubleSide });
+			const colBtn = new Mesh(new PlaneGeometry(0.075, 0.055), colMat);
+			colBtn.position.set(0.36, 0, 0.001);
+			colBtn.userData = {
+				kind: 'classcolor', hovered: false, colorIdx: -1,
+				onClick: () => {
+					const ud = colBtn.userData;
+					ud.colorIdx = (ud.colorIdx + 1) % CLASS_COLOR_PALETTE.length;
+					const col = CLASS_COLOR_PALETTE[ud.colorIdx];
+					this.viewer.classifications[code].color = [col[0], col[1], col[2], 1];
+					colMat.color.setRGB(col[0], col[1], col[2]);
+				},
+				redraw: () => {},
+			};
+			group.add(colBtn);
+
+			return { group, interactives: [cb, colBtn] };
+		}
+
+		_getActiveAttribute(){
+			const pc = this.viewer.scene.pointclouds[0];
+			return pc ? pc.material.activeAttributeName : 'rgba';
+		}
+
+		_applyAttribute(value){
+			for(const pc of this.viewer.scene.pointclouds){
+				const m = pc.material;
+				if(value === 'intensity gradient'){
+					const attr = pc.getAttribute('intensity');
+					if(attr && attr.range) m.intensityRange = [attr.range[0], attr.range[1]];
+				}
+				m.activeAttributeName = value;
+			}
+		}
+
 		_getRightController(){
 			for(const c of [this.cPrimary, this.cSecondary]){
 				if(c.inputSource && c.inputSource.handedness === 'right') return c;
@@ -88260,6 +88437,12 @@ ENDSEC
 						this._showMenu(this.measureMenu);
 						return;
 					}
+					if(ud.modeId === 'OPEN_ATTRIBUTE'){
+						this._showMenu(this.attributeMenu);
+						if(this._attributeRefresh) this._attributeRefresh();
+						this._buildAttrControls(this._getActiveAttribute());
+						return;
+					}
 					if(ud.modeId === 'MEASURE_DISTANCE'){
 						this._startMeasureMode('distance');
 						return;
@@ -88295,6 +88478,12 @@ ENDSEC
 					// Toggle
 					if(ud.kind === 'toggle'){
 						ud.toggle();
+						return;
+					}
+
+					// Botón de color de clase (cicla la paleta)
+					if(ud.kind === 'classcolor'){
+						ud.onClick();
 						return;
 					}
 
