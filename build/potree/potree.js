@@ -53869,6 +53869,7 @@
 			this._showEdges = true;
 			this._showAzimuth = false;
 			this.maxMarkers = Number.MAX_SAFE_INTEGER;
+			this.scaleDivisor = 1;
 
 			this.sphereGeometry = new SphereGeometry(0.4, 10, 10);
 			this.color = new Color(0xff0000);
@@ -54246,7 +54247,7 @@
 					let center = new Vector3().add(point.position);
 					center.add(nextPoint.position);
 					center = center.multiplyScalar(0.5);
-					let distance = point.position.distanceTo(nextPoint.position);
+					let distance = point.position.distanceTo(nextPoint.position) / this.scaleDivisor;
 
 					edgeLabel.position.copy(center);
 
@@ -54293,7 +54294,7 @@
 					let highPoint = sorted[sorted.length - 1].position.clone();
 					let min = lowPoint.z;
 					let max = highPoint.z;
-					let height = max - min;
+					let height = (max - min) / this.scaleDivisor;
 
 					let start = new Vector3(highPoint.x, highPoint.y, min);
 					let end = new Vector3(highPoint.x, highPoint.y, max);
@@ -54381,7 +54382,7 @@
 					
 					circleRadiusLabel.visible = true;
 					circleRadiusLabel.position.copy(center.clone().add(B).multiplyScalar(0.5));
-					circleRadiusLabel.setText(`${radius.toFixed(3)}`);
+					circleRadiusLabel.setText(`${(radius / this.scaleDivisor).toFixed(3)}`);
 
 				}
 			}
@@ -54389,7 +54390,7 @@
 			{ // update area label
 				this.areaLabel.position.copy(centroid);
 				this.areaLabel.visible = this.showArea && this.points.length >= 3;
-				let area = this.getArea();
+				let area = this.getArea() / (this.scaleDivisor * this.scaleDivisor);
 
 				let suffix = "";
 				if(this.lengthUnit != null && this.lengthUnitDisplay != null){
@@ -88125,7 +88126,7 @@ ENDSEC
 			// Slider: Tamaño de Nodo
 			const sliderNodeSize = this._createSliderWidget({
 				label: 'Tam. Nodo',
-				min: 0, max: 100, step: 1,
+				min: 0, max: 1000, step: 10,
 				getValue: () => this.viewer.getMinNodeSize(),
 				setValue: (v) => this.viewer.setMinNodeSize(v),
 				valueFormat: (v) => v.toFixed(0),
@@ -88674,6 +88675,8 @@ ENDSEC
 			m.showEdges = true;
 			m.closed = false;
 			m.maxMarkers = (this.measureType === 'height') ? 2 : Infinity;
+			const pc = this.viewer.scene.pointclouds[0];
+			if(pc && pc.scale.x > 1.5) m.scaleDivisor = pc.scale.x;
 			this.viewer.scene.addMeasurement(m);
 			this.activeMeasurement = m;
 		}
