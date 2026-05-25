@@ -298,6 +298,7 @@ export class Measure extends THREE.Object3D {
 		this._showEdges = true;
 		this._showAzimuth = false;
 		this.maxMarkers = Number.MAX_SAFE_INTEGER;
+		this.scaleDivisor = 1;
 
 		this.sphereGeometry = new THREE.SphereGeometry(0.4, 10, 10);
 		this.color = new THREE.Color(0xff0000);
@@ -675,7 +676,7 @@ export class Measure extends THREE.Object3D {
 				let center = new THREE.Vector3().add(point.position);
 				center.add(nextPoint.position);
 				center = center.multiplyScalar(0.5);
-				let distance = point.position.distanceTo(nextPoint.position);
+				let distance = point.position.distanceTo(nextPoint.position) / this.scaleDivisor;
 
 				edgeLabel.position.copy(center);
 
@@ -722,7 +723,7 @@ export class Measure extends THREE.Object3D {
 				let highPoint = sorted[sorted.length - 1].position.clone();
 				let min = lowPoint.z;
 				let max = highPoint.z;
-				let height = max - min;
+				let height = (max - min) / this.scaleDivisor;
 
 				let start = new THREE.Vector3(highPoint.x, highPoint.y, min);
 				let end = new THREE.Vector3(highPoint.x, highPoint.y, max);
@@ -810,7 +811,7 @@ export class Measure extends THREE.Object3D {
 				
 				circleRadiusLabel.visible = true;
 				circleRadiusLabel.position.copy(center.clone().add(B).multiplyScalar(0.5));
-				circleRadiusLabel.setText(`${radius.toFixed(3)}`);
+				circleRadiusLabel.setText(`${(radius / this.scaleDivisor).toFixed(3)}`);
 
 			}
 		}
@@ -818,7 +819,7 @@ export class Measure extends THREE.Object3D {
 		{ // update area label
 			this.areaLabel.position.copy(centroid);
 			this.areaLabel.visible = this.showArea && this.points.length >= 3;
-			let area = this.getArea();
+			let area = this.getArea() / (this.scaleDivisor * this.scaleDivisor);
 
 			let suffix = "";
 			if(this.lengthUnit != null && this.lengthUnitDisplay != null){

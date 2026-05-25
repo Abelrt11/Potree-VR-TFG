@@ -939,7 +939,7 @@ export class VRControls extends EventDispatcher{
 		// Slider: Tamaño de Nodo
 		const sliderNodeSize = this._createSliderWidget({
 			label: 'Tam. Nodo',
-			min: 0, max: 100, step: 1,
+			min: 0, max: 1000, step: 10,
 			getValue: () => this.viewer.getMinNodeSize(),
 			setValue: (v) => this.viewer.setMinNodeSize(v),
 			valueFormat: (v) => v.toFixed(0),
@@ -1488,6 +1488,8 @@ export class VRControls extends EventDispatcher{
 		m.showEdges = true;
 		m.closed = false;
 		m.maxMarkers = (this.measureType === 'height') ? 2 : Infinity;
+		const pc = this.viewer.scene.pointclouds[0];
+		if(pc && pc.scale.x > 1.5) m.scaleDivisor = pc.scale.x;
 		this.viewer.scene.addMeasurement(m);
 		this.activeMeasurement = m;
 	}
