@@ -661,14 +661,9 @@ export class VRControls extends EventDispatcher{
 			});
 		};
 
-		// Fila única centrada si ≤2 opciones, 2×2 si hay más
-		const rowY = options.length <= 2 ? 0 : 0.06;
-		const positions = [
-			{ x: -0.16, y:  rowY },
-			{ x:  0.16, y:  rowY },
-			{ x: -0.16, y: -rowY },
-			{ x:  0.16, y: -rowY },
-		];
+		const nRows = Math.ceil(options.length / 2);
+		const rowSpacing = options.length <= 2 ? 0 : 0.12;
+		const startY = (nRows - 1) * rowSpacing / 2;
 
 		const initialValue = getValue();
 
@@ -680,8 +675,12 @@ export class VRControls extends EventDispatcher{
 			const tex = new THREE.CanvasTexture(canvas);
 			const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true });
 			const mesh = new THREE.Mesh(new THREE.PlaneGeometry(0.26, 0.10), mat);
-			const pos = positions[i] || { x: 0, y: 0 };
-			mesh.position.set(pos.x, pos.y, 0.001);
+			const row = Math.floor(i / 2);
+			const col = i % 2;
+			const isLastOdd = (options.length % 2 !== 0) && (i === options.length - 1);
+			const x = isLastOdd ? 0 : (col === 0 ? -0.16 : 0.16);
+			const y = startY - row * rowSpacing;
+			mesh.position.set(x, y, 0.001);
 			mesh.userData = {
 				kind: 'radio',
 				radioValue: value,
@@ -1018,12 +1017,12 @@ export class VRControls extends EventDispatcher{
 		const bgMat = new THREE.MeshBasicMaterial({
 			color: 0x0d1b2e, transparent: true, opacity: 0.88, side: THREE.DoubleSide,
 		});
-		const bg = new THREE.Mesh(new THREE.PlaneGeometry(0.85, 1.45), bgMat);
+		const bg = new THREE.Mesh(new THREE.PlaneGeometry(0.85, 2.00), bgMat);
 		group.add(bg);
 
 		const title = new Potree.TextSprite('ATRIBUTO');
 		title.scale.set(0.08, 0.08, 0.08);
-		title.position.set(0, 0.64, 0.002);
+		title.position.set(0, 0.78, 0.002);
 		group.add(title);
 
 		const radio = this._createRadioGroupWidget({
@@ -1031,16 +1030,20 @@ export class VRControls extends EventDispatcher{
 				{ label: 'RGBA',          value: 'rgba'               },
 				{ label: 'Clasificación', value: 'classification'     },
 				{ label: 'Intensidad',    value: 'intensity gradient' },
+				{ label: 'Elevación',     value: 'elevation'          },
+				{ label: 'Nivel Detalle', value: 'level of detail'    },
+				{ label: 'Tiempo GPS',    value: 'gps-time'           },
+				{ label: 'N. Retornos',   value: 'number of returns'  },
 			],
 			getValue: () => this._getActiveAttribute(),
 			setValue: (v) => { this._applyAttribute(v); this._buildAttrControls(v); },
 		});
-		radio.group.position.set(0, 0.49, 0.002);
+		radio.group.position.set(0, 0.54, 0.002);
 		group.add(radio.group);
 		this._attributeRefresh = radio.refreshAll;
 
 		const btnBack = this._createMenuButton('← Volver', 'BACK_TO_MAIN');
-		btnBack.position.set(0, -0.66, 0.002);
+		btnBack.position.set(0, -0.90, 0.002);
 		group.add(btnBack);
 
 		// Región de controles que se reconstruye según el atributo seleccionado
@@ -1071,9 +1074,9 @@ export class VRControls extends EventDispatcher{
 				valueFormat: (v) => v.toFixed(2),
 			});
 			const rows = [
-				{ w: mk('Gamma',     p.g,  0, 4, 1), y:  0.28 },
-				{ w: mk('Brillo',    p.b, -1, 1, 0), y:  0.00 },
-				{ w: mk('Contraste', p.c, -1, 1, 0), y: -0.28 },
+				{ w: mk('Gamma',     p.g,  0, 4, 1), y:  0.00 },
+				{ w: mk('Brillo',    p.b, -1, 1, 0), y: -0.28 },
+				{ w: mk('Contraste', p.c, -1, 1, 0), y: -0.56 },
 			];
 			for(const { w, y } of rows){
 				w.group.position.set(0, y, 0.002);
@@ -1081,7 +1084,7 @@ export class VRControls extends EventDispatcher{
 				interactives.push(...w.interactives);
 			}
 		}else if(attr === 'classification'){
-			let y = 0.34;
+			let y = 0.20;
 			for(const code of Object.keys(this.viewer.classifications)){
 				const row = this._createClassRow(code);
 				row.group.position.set(0, y, 0.002);
