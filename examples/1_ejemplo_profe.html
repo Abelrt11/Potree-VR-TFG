@@ -122,6 +122,16 @@
   })();
 
   let viewmode = 2;
+  let cloudIndex = 1;
+
+  function getCloudUrl(idx) {
+    switch(idx) {
+      case 2:  return 'https://pub-e5dc5ebf430a493e98528ece772092b4.r2.dev/ejemplo2/metadata.json';
+      case 3:  return 'https://pub-e5dc5ebf430a493e98528ece772092b4.r2.dev/ejemplo3/metadata.json';
+      case 5:  return 'https://pub-e5dc5ebf430a493e98528ece772092b4.r2.dev/ejemplo5/metadata.json';
+      default: return 'https://pub-e5dc5ebf430a493e98528ece772092b4.r2.dev/ejemplo1/metadata.json';
+    }
+  }
 
   window.viewer = new Potree.Viewer(document.getElementById("potree_render_area"));
   viewer.renderer.xr.enabled = true;
@@ -163,6 +173,12 @@
     loadCloudMode(viewmode);
   });
 
+  // Recibe la selección de nube desde el submenú VR
+  document.addEventListener('vr-cloud-select', (e) => {
+    cloudIndex = e.detail.cloud;
+    loadCloudMode(viewmode);
+  });
+
   /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
   /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
   /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -194,7 +210,7 @@
     switch (viewmode) {
 
       case 1: //Aerial mode
-        Potree.loadPointCloud("https://pub-e5dc5ebf430a493e98528ece772092b4.r2.dev/ejemplo1/metadata.json").then(e => {
+        Potree.loadPointCloud(getCloudUrl(cloudIndex)).then(e => {
           let pointcloud = e.pointcloud;
           let material = e.pointcloud.material;
           material.size = 1;
@@ -234,7 +250,7 @@
         break;
       case 2: //walker mode
         viewer.setControls(new Potree.FirstPersonControls(viewer));
-        Potree.loadPointCloud("https://pub-e5dc5ebf430a493e98528ece772092b4.r2.dev/ejemplo1/metadata.json").then(e => {
+        Potree.loadPointCloud(getCloudUrl(cloudIndex)).then(e => {
           let pointcloud = e.pointcloud;
           let material = e.pointcloud.material;
           material.size = 0.5;
@@ -250,7 +266,14 @@
           viewer.scene.getActiveCamera().far = Math.max(size.x, size.y, size.z) * 10;
           viewer.scene.getActiveCamera().updateProjectionMatrix();
 
-          let camPos = new THREE.Vector3(426808.02, 4478030.49, 1034.87 + 20.7);
+          let walkerCoords;
+          switch(cloudIndex) {
+            case 2:  walkerCoords = [426768.400, 4478215.481, 835.360  + 20.7]; break;
+            case 3:  walkerCoords = [424328.211, 4476365.500, 785.870  + 20.7]; break;
+            case 5:  walkerCoords = [425538.371, 4474447.171, 854.129  + 20.7]; break;
+            default: walkerCoords = [426808.02,  4478030.49,  1034.87  + 20.7]; break;
+          }
+          let camPos = new THREE.Vector3(...walkerCoords);
           viewer.scene.view.position.copy(camPos);
 
           let lookAtPos = camPos.clone();

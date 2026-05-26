@@ -87688,6 +87688,7 @@ ENDSEC
 			this._createAppearanceMenu();
 			this._createMeasureMenu();
 			this._createAttributeMenu();
+			this._createCloudMenu();
 		}
 
 		_createVRMenu(){
@@ -87695,14 +87696,14 @@ ENDSEC
 			group.name = 'vr-mode-menu';
 			group.visible = false;
 
-			// Fondo del panel (ampliado para 5 botones)
+			// Fondo del panel (ampliado para 6 botones)
 			const bgMat = new MeshBasicMaterial({
 				color: 0x0d1b2e,
 				transparent: true,
 				opacity: 0.88,
 				side: DoubleSide,
 			});
-			const bg = new Mesh(new PlaneGeometry(0.64, 0.74), bgMat);
+			const bg = new Mesh(new PlaneGeometry(0.64, 0.90), bgMat);
 			group.add(bg);
 
 			// Título
@@ -87732,7 +87733,11 @@ ENDSEC
 			btnAttribute.position.set(0, -0.16, 0.002);
 			group.add(btnAttribute);
 
-			group.userData.interactives = [btnWalk, btnGod, btnPoints, btnAppearance, btnAttribute];
+			const btnChangeCloud = this._createMenuButton('Cambiar nube\nde puntos', 'OPEN_CLOUD_MENU');
+			btnChangeCloud.position.set(0, -0.32, 0.002);
+			group.add(btnChangeCloud);
+
+			group.userData.interactives = [btnWalk, btnGod, btnPoints, btnAppearance, btnAttribute, btnChangeCloud];
 			this.viewer.sceneVR.add(group);
 			this.mainMenu = group;
 			window.vrMenu = group;
@@ -87848,14 +87853,9 @@ ENDSEC
 				});
 			};
 
-			// Fila única centrada si ≤2 opciones, 2×2 si hay más
-			const rowY = options.length <= 2 ? 0 : 0.06;
-			const positions = [
-				{ x: -0.16, y:  rowY },
-				{ x:  0.16, y:  rowY },
-				{ x: -0.16, y: -rowY },
-				{ x:  0.16, y: -rowY },
-			];
+			const nRows = Math.ceil(options.length / 2);
+			const rowSpacing = options.length <= 2 ? 0 : 0.12;
+			const startY = (nRows - 1) * rowSpacing / 2;
 
 			const initialValue = getValue();
 
@@ -87867,8 +87867,12 @@ ENDSEC
 				const tex = new CanvasTexture(canvas);
 				const mat = new MeshBasicMaterial({ map: tex, transparent: true });
 				const mesh = new Mesh(new PlaneGeometry(0.26, 0.10), mat);
-				const pos = positions[i] || { x: 0, y: 0 };
-				mesh.position.set(pos.x, pos.y, 0.001);
+				const row = Math.floor(i / 2);
+				const col = i % 2;
+				const isLastOdd = (options.length % 2 !== 0) && (i === options.length - 1);
+				const x = isLastOdd ? 0 : (col === 0 ? -0.16 : 0.16);
+				const y = startY - row * rowSpacing;
+				mesh.position.set(x, y, 0.001);
 				mesh.userData = {
 					kind: 'radio',
 					radioValue: value,
@@ -87905,6 +87909,7 @@ ENDSEC
 			if(this.appearanceMenu) this.appearanceMenu.visible = false;
 			if(this.measureMenu) this.measureMenu.visible = false;
 			if(this.attributeMenu) this.attributeMenu.visible = false;
+			if(this.cloudMenu) this.cloudMenu.visible = false;
 			this.activeMenu = null;
 			this._setLaserLength(false);
 		}
@@ -88205,12 +88210,12 @@ ENDSEC
 			const bgMat = new MeshBasicMaterial({
 				color: 0x0d1b2e, transparent: true, opacity: 0.88, side: DoubleSide,
 			});
-			const bg = new Mesh(new PlaneGeometry(0.85, 1.45), bgMat);
+			const bg = new Mesh(new PlaneGeometry(0.85, 2.00), bgMat);
 			group.add(bg);
 
 			const title = new Potree.TextSprite('ATRIBUTO');
 			title.scale.set(0.08, 0.08, 0.08);
-			title.position.set(0, 0.64, 0.002);
+			title.position.set(0, 0.78, 0.002);
 			group.add(title);
 
 			const radio = this._createRadioGroupWidget({
@@ -88218,16 +88223,20 @@ ENDSEC
 					{ label: 'RGBA',          value: 'rgba'               },
 					{ label: 'Clasificación', value: 'classification'     },
 					{ label: 'Intensidad',    value: 'intensity gradient' },
+					{ label: 'Elevación',     value: 'elevation'          },
+					{ label: 'Nivel Detalle', value: 'level of detail'    },
+					{ label: 'Tiempo GPS',    value: 'gps-time'           },
+					{ label: 'N. Retornos',   value: 'number of returns'  },
 				],
 				getValue: () => this._getActiveAttribute(),
 				setValue: (v) => { this._applyAttribute(v); this._buildAttrControls(v); },
 			});
-			radio.group.position.set(0, 0.49, 0.002);
+			radio.group.position.set(0, 0.54, 0.002);
 			group.add(radio.group);
 			this._attributeRefresh = radio.refreshAll;
 
 			const btnBack = this._createMenuButton('← Volver', 'BACK_TO_MAIN');
-			btnBack.position.set(0, -0.66, 0.002);
+			btnBack.position.set(0, -0.90, 0.002);
 			group.add(btnBack);
 
 			// Región de controles que se reconstruye según el atributo seleccionado
@@ -88239,6 +88248,50 @@ ENDSEC
 			group.userData.interactives = [...radio.interactives, btnBack];
 			this.viewer.sceneVR.add(group);
 			this.attributeMenu = group;
+		}
+
+		_createCloudMenu(){
+			const group = new Group();
+			group.name = 'vr-cloud-menu';
+			group.visible = false;
+
+			const bgMat = new MeshBasicMaterial({
+				color: 0x0d1b2e, transparent: true, opacity: 0.88, side: DoubleSide,
+			});
+			const bg = new Mesh(new PlaneGeometry(0.64, 0.68), bgMat);
+			group.add(bg);
+
+			const title = new Potree.TextSprite('NUBE DE PUNTOS');
+			title.scale.set(0.07, 0.07, 0.07);
+			title.position.set(0, 0.30, 0.002);
+			group.add(title);
+
+			const clouds = [
+				{ label: 'Ejemplo 1', cloud: 1 },
+				{ label: 'Ejemplo 2', cloud: 2 },
+				{ label: 'Ejemplo 3', cloud: 3 },
+				{ label: 'Ejemplo 5', cloud: 5 },
+			];
+			const positions = [
+				{ x: -0.17, y: 0.14 }, { x: 0.17, y: 0.14 },
+				{ x: -0.17, y: -0.01 }, { x: 0.17, y: -0.01 },
+			];
+
+			const btns = clouds.map(({ label, cloud }, i) => {
+				const btn = this._createMenuButton(label, 'SELECT_CLOUD');
+				btn.userData.cloudId = cloud;
+				btn.position.set(positions[i].x, positions[i].y, 0.002);
+				group.add(btn);
+				return btn;
+			});
+
+			const btnBack = this._createMenuButton('← Volver', 'BACK_TO_MAIN');
+			btnBack.position.set(0, -0.22, 0.002);
+			group.add(btnBack);
+
+			group.userData.interactives = [...btns, btnBack];
+			this.viewer.sceneVR.add(group);
+			this.cloudMenu = group;
 		}
 
 		_buildAttrControls(attr){
@@ -88258,9 +88311,9 @@ ENDSEC
 					valueFormat: (v) => v.toFixed(2),
 				});
 				const rows = [
-					{ w: mk('Gamma',     p.g,  0, 4, 1), y:  0.28 },
-					{ w: mk('Brillo',    p.b, -1, 1, 0), y:  0.00 },
-					{ w: mk('Contraste', p.c, -1, 1, 0), y: -0.28 },
+					{ w: mk('Gamma',     p.g,  0, 4, 1), y:  0.00 },
+					{ w: mk('Brillo',    p.b, -1, 1, 0), y: -0.28 },
+					{ w: mk('Contraste', p.c, -1, 1, 0), y: -0.56 },
 				];
 				for(const { w, y } of rows){
 					w.group.position.set(0, y, 0.002);
@@ -88268,7 +88321,7 @@ ENDSEC
 					interactives.push(...w.interactives);
 				}
 			}else if(attr === 'classification'){
-				let y = 0.34;
+				let y = 0.20;
 				for(const code of Object.keys(this.viewer.classifications)){
 					const row = this._createClassRow(code);
 					row.group.position.set(0, y, 0.002);
@@ -88432,6 +88485,15 @@ ENDSEC
 					}
 					if(ud.modeId === 'BACK_TO_MAIN'){
 						this._showMenu(this.mainMenu);
+						return;
+					}
+					if(ud.modeId === 'OPEN_CLOUD_MENU'){
+						this._showMenu(this.cloudMenu);
+						return;
+					}
+					if(ud.modeId === 'SELECT_CLOUD'){
+						document.dispatchEvent(new CustomEvent('vr-cloud-select', { detail: { cloud: ud.cloudId } }));
+						this._hideAllMenus();
 						return;
 					}
 
