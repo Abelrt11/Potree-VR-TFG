@@ -441,6 +441,15 @@ export class VRControls extends EventDispatcher{
 		this.activeMeasurement = null;
 		this.measureType = 'distance';
 
+		// Recortado de zonas (clipping con cubo)
+		this.clipMode = false;
+		this.clipBoxes = [];          // [{ volume, handles: [6 meshes] }]
+		this.clipMenu = null;
+		this.clipTaskMenu = null;
+		this._clipHandleGroup = null; // THREE.Group dentro de viewer.volumeTool.scene
+		this._clipDragging = null;    // { entry, axisIndex } durante el arrastre
+		this._clipHovered = null;     // tirador resaltado
+
 		document.addEventListener('vr-mode-select', (e) => {
 			if(e.detail.mode !== 3 && this.pointsMode) this._finishMeasurement();
 			this.pointsMode = (e.detail.mode === 3);
@@ -501,6 +510,8 @@ export class VRControls extends EventDispatcher{
 		this._createAppearanceMenu();
 		this._createMeasureMenu();
 		this._createAttributeMenu();
+		this._createClipMenu();
+		this._createClipTaskMenu();
 	}
 
 	_createVRMenu(){
@@ -515,22 +526,22 @@ export class VRControls extends EventDispatcher{
 			opacity: 0.88,
 			side: THREE.DoubleSide,
 		});
-		const bg = new THREE.Mesh(new THREE.PlaneGeometry(0.64, 0.74), bgMat);
+		const bg = new THREE.Mesh(new THREE.PlaneGeometry(0.64, 0.86), bgMat);
 		group.add(bg);
 
 		// Título
 		const title = new Potree.TextSprite('MODO DE VISIÓN');
 		title.scale.set(0.07, 0.07, 0.07);
-		title.position.set(0, 0.30, 0.002);
+		title.position.set(0, 0.34, 0.002);
 		group.add(title);
 
-		// Grid: Paseo | Aéreo / Medidas | Apariencia / Atributo (centrado)
+		// Grid 3x2: Paseo | Aéreo / Medidas | Apariencia / Atributo | Recortado
 		const btnWalk = this._createMenuButton('Modo Paseo', 2);
-		btnWalk.position.set(-0.17, 0.15, 0.002);
+		btnWalk.position.set(-0.17, 0.16, 0.002);
 		group.add(btnWalk);
 
 		const btnGod = this._createMenuButton('Modo Aéreo', 1);
-		btnGod.position.set(0.17, 0.15, 0.002);
+		btnGod.position.set(0.17, 0.16, 0.002);
 		group.add(btnGod);
 
 		const btnPoints = this._createMenuButton('Activar Colocar\nMedidas', 'OPEN_MEASURE');
@@ -542,10 +553,14 @@ export class VRControls extends EventDispatcher{
 		group.add(btnAppearance);
 
 		const btnAttribute = this._createMenuButton('Atributo', 'OPEN_ATTRIBUTE');
-		btnAttribute.position.set(0, -0.16, 0.002);
+		btnAttribute.position.set(-0.17, -0.16, 0.002);
 		group.add(btnAttribute);
 
-		group.userData.interactives = [btnWalk, btnGod, btnPoints, btnAppearance, btnAttribute];
+		const btnClip = this._createMenuButton('Recortado de\nZonas', 'OPEN_CLIP');
+		btnClip.position.set(0.17, -0.16, 0.002);
+		group.add(btnClip);
+
+		group.userData.interactives = [btnWalk, btnGod, btnPoints, btnAppearance, btnAttribute, btnClip];
 		this.viewer.sceneVR.add(group);
 		this.mainMenu = group;
 		window.vrMenu = group;
@@ -717,6 +732,8 @@ export class VRControls extends EventDispatcher{
 		if(this.appearanceMenu) this.appearanceMenu.visible = false;
 		if(this.measureMenu) this.measureMenu.visible = false;
 		if(this.attributeMenu) this.attributeMenu.visible = false;
+		if(this.clipMenu) this.clipMenu.visible = false;
+		if(this.clipTaskMenu) this.clipTaskMenu.visible = false;
 		this.activeMenu = null;
 		this._setLaserLength(false);
 	}
@@ -1009,6 +1026,82 @@ export class VRControls extends EventDispatcher{
 		this.measureMenu = group;
 	}
 
+	_createClipMenu(){
+		const group = new THREE.Group();
+		group.name = 'vr-clip-menu';
+		group.visible = false;
+
+		const bgMat = new THREE.MeshBasicMaterial({
+			color: 0x0d1b2e, transparent: true, opacity: 0.88, side: THREE.DoubleSide,
+		});
+		const bg = new THREE.Mesh(new THREE.PlaneGeometry(0.70, 0.84), bgMat);
+		group.add(bg);
+
+		const title = new Potree.TextSprite('RECORTADO DE ZONAS');
+		title.scale.set(0.055, 0.055, 0.055);
+		title.position.set(0, 0.26, 0.002);
+		group.add(title);
+
+		const btnDelimit = this._createMenuButton('Delimitar Zonas', 'CLIP_DELIMIT');
+		btnDelimit.position.set(0, 0.12, 0.002);
+		group.add(btnDelimit);
+
+		const btnModify = this._createMenuButton('Modificar Zonas', 'OPEN_CLIP_TASK');
+		btnModify.position.set(0, -0.03, 0.002);
+		group.add(btnModify);
+
+		const btnDelete = this._createMenuButton('Eliminar Zonas', 'CLIP_DELETE');
+		btnDelete.position.set(0, -0.18, 0.002);
+		group.add(btnDelete);
+
+		const btnBack = this._createMenuButton('← Volver', 'BACK_TO_MAIN');
+		btnBack.position.set(0, -0.33, 0.002);
+		group.add(btnBack);
+
+		group.userData.interactives = [btnDelimit, btnModify, btnDelete, btnBack];
+		this.viewer.sceneVR.add(group);
+		this.clipMenu = group;
+	}
+
+	_createClipTaskMenu(){
+		const group = new THREE.Group();
+		group.name = 'vr-cliptask-menu';
+		group.visible = false;
+
+		const bgMat = new THREE.MeshBasicMaterial({
+			color: 0x0d1b2e, transparent: true, opacity: 0.88, side: THREE.DoubleSide,
+		});
+		const bg = new THREE.Mesh(new THREE.PlaneGeometry(0.64, 0.62), bgMat);
+		group.add(bg);
+
+		const title = new Potree.TextSprite('CLIP TASK');
+		title.scale.set(0.07, 0.07, 0.07);
+		title.position.set(0, 0.24, 0.002);
+		group.add(title);
+
+		const radio = this._createRadioGroupWidget({
+			options: [
+				{ label: 'Ninguno',       value: Potree.ClipTask.NONE },
+				{ label: 'Resaltar',      value: Potree.ClipTask.HIGHLIGHT },
+				{ label: 'Solo interior', value: Potree.ClipTask.SHOW_INSIDE },
+				{ label: 'Solo exterior', value: Potree.ClipTask.SHOW_OUTSIDE },
+			],
+			getValue: () => this.viewer.getClipTask(),
+			setValue: (v) => this.viewer.setClipTask(v),
+		});
+		radio.group.position.set(0, 0.02, 0.002);
+		group.add(radio.group);
+		this._clipTaskRefresh = radio.refreshAll;
+
+		const btnBack = this._createMenuButton('← Volver', 'BACK_TO_MAIN');
+		btnBack.position.set(0, -0.24, 0.002);
+		group.add(btnBack);
+
+		group.userData.interactives = [...radio.interactives, btnBack];
+		this.viewer.sceneVR.add(group);
+		this.clipTaskMenu = group;
+	}
+
 	_createAttributeMenu(){
 		const group = new THREE.Group();
 		group.name = 'vr-attribute-menu';
@@ -1262,6 +1355,23 @@ export class VRControls extends EventDispatcher{
 					this._buildAttrControls(this._getActiveAttribute());
 					return;
 				}
+				if(ud.modeId === 'OPEN_CLIP'){
+					this._showMenu(this.clipMenu);
+					return;
+				}
+				if(ud.modeId === 'OPEN_CLIP_TASK'){
+					this._showMenu(this.clipTaskMenu);
+					if(this._clipTaskRefresh) this._clipTaskRefresh();
+					return;
+				}
+				if(ud.modeId === 'CLIP_DELIMIT'){
+					this._startClipMode();
+					return;
+				}
+				if(ud.modeId === 'CLIP_DELETE'){
+					this._deleteAllClipBoxes();
+					return;
+				}
 				if(ud.modeId === 'MEASURE_DISTANCE'){
 					this._startMeasureMode('distance');
 					return;
@@ -1318,6 +1428,15 @@ export class VRControls extends EventDispatcher{
 			return;
 		}
 
+		if(this.clipMode){
+			if(this._clipHovered){
+				this._beginAxisDrag(this._clipHovered);
+			}else{
+				this._placeClipBox(controller);
+			}
+			return;
+		}
+
 		if(this.pointsMode){
 			this._placeVRPoint(controller);
 			return;
@@ -1327,6 +1446,12 @@ export class VRControls extends EventDispatcher{
 	}
 
 	onTriggerEnd(controller){
+		// Terminar arrastre de eje de recorte si estaba activo
+		if(this._clipDragging){
+			this._clipDragging = null;
+			return;
+		}
+
 		// Terminar drag si estaba activo
 		if(this._dragging){
 			this._dragging = null;
@@ -1345,6 +1470,11 @@ export class VRControls extends EventDispatcher{
 	}
 
 	onSqueezeStart(controller){
+		if(this.clipMode){
+			this._finishClipMode();
+			return;
+		}
+
 		if(this.pointsMode){
 			this._finishMeasurement();
 			return;
@@ -1539,6 +1669,203 @@ export class VRControls extends EventDispatcher{
 		this.pointsMode = false;
 	}
 
+	// ===== Recortado de zonas (clipping con cubo) =====
+
+	_startClipMode(){
+		if(this.pointsMode) this._finishMeasurement();
+		this.clipMode = true;
+		this._clipDragging = null;
+		this._clipHovered = null;
+		this._ensureClipHandleGroup();
+		if(this._clipHandleGroup) this._clipHandleGroup.visible = true;
+		this._hideAllMenus();
+		this._setLaserLength(true);
+	}
+
+	_finishClipMode(){
+		this._clipDragging = null;
+		if(this._clipHovered && this._clipHovered.material){
+			this._clipHovered.material.color.setHex(this._clipHovered.userData.baseColor);
+		}
+		this._clipHovered = null;
+		if(this._clipHandleGroup) this._clipHandleGroup.visible = false;
+		this.clipMode = false;
+		this._setLaserLength(false);
+	}
+
+	_ensureClipHandleGroup(){
+		if(this._clipHandleGroup) return;
+		const g = new THREE.Group();
+		g.name = 'vr-clip-handles';
+		const vt = this.viewer.volumeTool;
+		if(vt && vt.scene) vt.scene.add(g);
+		this._clipHandleGroup = g;
+	}
+
+	_clipPointerRay(controller){
+		if(!controller) return null;
+		const originVR = new THREE.Vector3();
+		const quat = new THREE.Quaternion();
+		controller.getWorldPosition(originVR);
+		controller.getWorldQuaternion(quat);
+		const dirVR = new THREE.Vector3(0, 0, -1).applyQuaternion(quat);
+		const origin = this.toScene(originVR);
+		const direction = this.toScene(originVR.clone().add(dirVR)).sub(origin).normalize();
+		return { origin, direction };
+	}
+
+	_placeClipBox(controller){
+		const ray = this._clipPointerRay(controller);
+		if(!ray) return;
+
+		// Tamaño por defecto: ~10% de la diagonal LOCAL de la nube (SIN la escala de
+		// visualización). En modo Paseo la nube se renderiza con scale=10; al no
+		// multiplicar por esa escala, el cubo en unidades de mundo queda ~10× menor
+		// respecto a la nube renderizada → tamaño cómodo (en Aéreo, scale=1, igual que antes).
+		const pc = this.viewer.scene.pointclouds[0];
+		let diag = 10;
+		if(pc && pc.boundingBox){
+			const size = pc.boundingBox.getSize(new THREE.Vector3());
+			diag = size.length();
+		}
+		const edge = Math.max(diag * 0.18, 1e-3);
+
+		// Posición: intersección con la nube; si no hay, a unos pocos lados delante del mando
+		let pos = this._raycastPointClouds(controller);
+		if(!pos){
+			pos = ray.origin.clone().addScaledVector(ray.direction, edge * 5);
+		}else{
+			// Desplazar la caja hacia el observador a lo largo del rayo para que no quede
+			// medio enterrada: el punto apuntado queda en su tercio trasero, pero dentro de
+			// la caja, de modo que sigue encerrando el volumen de puntos de la superficie.
+			pos.addScaledVector(ray.direction, -edge * 0.3);
+		}
+
+		const v = new Potree.BoxVolume();
+		v.clip = true;
+		v.name = 'VR Clip ' + (this.clipBoxes.length + 1);
+		v.position.copy(pos);
+		v.scale.set(edge, edge, edge);
+		if(v.frame && v.frame.material) v.frame.material.color.setHex(0xffff00);
+
+		this.viewer.scene.addVolume(v);
+
+		const entry = { volume: v, handles: [] };
+		this._createAxisHandles(entry);
+		this.clipBoxes.push(entry);
+		this._updateClipHandles();
+	}
+
+	_createAxisHandles(entry){
+		this._ensureClipHandleGroup();
+		const colors = [0xff3333, 0x33ff33, 0x3333ff]; // X, Y, Z
+		const geo = new THREE.SphereGeometry(1, 16, 16);
+		for(let axis = 0; axis < 3; axis++){
+			for(const sign of [1, -1]){
+				const mat = new THREE.MeshBasicMaterial({ color: colors[axis], depthTest: false, depthWrite: false });
+				const mesh = new THREE.Mesh(geo, mat);
+				mesh.renderOrder = 10;
+				mesh.userData = { kind: 'cliphandle', entry, axisIndex: axis, sign, baseColor: colors[axis] };
+				if(this._clipHandleGroup) this._clipHandleGroup.add(mesh);
+				entry.handles.push(mesh);
+			}
+		}
+	}
+
+	_updateClipHandles(){
+		if(!this.clipBoxes.length) return;
+		const axisVec = [
+			new THREE.Vector3(1, 0, 0),
+			new THREE.Vector3(0, 1, 0),
+			new THREE.Vector3(0, 0, 1),
+		];
+		for(const entry of this.clipBoxes){
+			const v = entry.volume;
+			const sc = v.scale;
+			const r = Math.max(Math.max(sc.x, sc.y, sc.z) * 0.06, 1e-3);
+			for(const h of entry.handles){
+				const ai = h.userData.axisIndex;
+				const half = (ai === 0 ? sc.x : ai === 1 ? sc.y : sc.z) / 2;
+				h.position.copy(v.position).addScaledVector(axisVec[ai], h.userData.sign * half);
+				h.scale.set(r, r, r);
+			}
+		}
+	}
+
+	_updateClipHover(pointer){
+		const ray = this._clipPointerRay(pointer);
+		let best = null;
+		if(ray){
+			let bestT = Infinity;
+			const d = new THREE.Vector3();
+			for(const entry of this.clipBoxes){
+				for(const h of entry.handles){
+					const thresh = h.scale.x * 1.8;
+					d.copy(h.position).sub(ray.origin);
+					const t = d.dot(ray.direction);
+					if(t <= 0) continue;
+					const perp2 = d.lengthSq() - t * t;
+					if(perp2 <= thresh * thresh && t < bestT){
+						bestT = t;
+						best = h;
+					}
+				}
+			}
+		}
+		if(best !== this._clipHovered){
+			if(this._clipHovered && this._clipHovered.material){
+				this._clipHovered.material.color.setHex(this._clipHovered.userData.baseColor);
+			}
+			this._clipHovered = best;
+			if(best && best.material) best.material.color.setHex(0xffffff);
+		}
+	}
+
+	_beginAxisDrag(handle){
+		if(!handle || !handle.userData) return;
+		this._clipDragging = { entry: handle.userData.entry, axisIndex: handle.userData.axisIndex };
+	}
+
+	// Elimina todos los cubos delimitadores creados. Reutiliza viewer.scene.removeVolume
+	// (la misma función que usa el borrado del Potree de escritorio), que dispara
+	// 'volume_removed' → VolumeTool lo quita de su escena y deja de recortar.
+	_deleteAllClipBoxes(){
+		for(const entry of this.clipBoxes){
+			this.viewer.scene.removeVolume(entry.volume);
+			for(const h of entry.handles){
+				if(this._clipHandleGroup) this._clipHandleGroup.remove(h);
+				if(h.material) h.material.dispose();
+			}
+		}
+		this.clipBoxes = [];
+		this._clipHovered = null;
+		this._clipDragging = null;
+	}
+
+	_updateAxisDrag(pointer){
+		const ray = this._clipPointerRay(pointer);
+		if(!ray) return;
+		const v = this._clipDragging.entry.volume;
+		const ai = this._clipDragging.axisIndex;
+		const C = v.position;
+		const A = (ai === 0) ? new THREE.Vector3(1, 0, 0)
+			: (ai === 1) ? new THREE.Vector3(0, 1, 0)
+			: new THREE.Vector3(0, 0, 1);
+
+		// Punto más cercano entre el rayo (O,dir) y la recta del eje (C,A); dir y A son unitarios
+		const w0 = ray.origin.clone().sub(C);
+		const b = ray.direction.dot(A);
+		const d = ray.direction.dot(w0);
+		const e = A.dot(w0);
+		const denom = 1 - b * b;
+		if(Math.abs(denom) < 1e-6) return; // rayo casi paralelo al eje
+		const tc = (e - b * d) / denom;    // distancia con signo a lo largo de A desde el centro
+		const newSize = Math.max(2 * Math.abs(tc), 1e-3);
+		if(ai === 0) v.scale.x = newSize;
+		else if(ai === 1) v.scale.y = newSize;
+		else v.scale.z = newSize;
+	}
+
 	update(delta){
 		const rightCtrl = this._getRightController();
 		const pointer = rightCtrl || this.cPrimary;
@@ -1597,6 +1924,16 @@ export class VRControls extends EventDispatcher{
 				console.log('[VRPTS] preview ok');
 			} catch(e) {
 				console.log('[VRPTS] ERROR preview: ' + e.message + '\n' + (e.stack || ''));
+			}
+		}
+
+		// Recortado de zonas: reposicionar tiradores, hover y arrastre de ejes
+		if(this.clipMode){
+			this._updateClipHandles();
+			if(this._clipDragging){
+				this._updateAxisDrag(pointer);
+			}else if(!(this.activeMenu && this.activeMenu.visible)){
+				this._updateClipHover(pointer);
 			}
 		}
 
