@@ -10,7 +10,7 @@
   <meta name="description" content="">
   <meta name="author" content="">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
-  <title>Potree Viewer</title>
+  <title>Potree Viewer - Corredor (1+2+3)</title>
 
   <link rel="stylesheet" type="text/css" href="../build/potree/potree.css">
   <link rel="stylesheet" type="text/css" href="../libs/jquery-ui/jquery-ui.min.css">
@@ -122,16 +122,6 @@
   })();
 
   let viewmode = 2;
-  let cloudIndex = 1;
-
-  function getCloudUrl(idx) {
-    switch(idx) {
-      case 2:  return 'https://pub-e5dc5ebf430a493e98528ece772092b4.r2.dev/ejemplo2/metadata.json';
-      case 3:  return 'https://pub-e5dc5ebf430a493e98528ece772092b4.r2.dev/ejemplo3/metadata.json';
-      case 5:  return 'https://pub-e5dc5ebf430a493e98528ece772092b4.r2.dev/ejemplo5/metadata.json';
-      default: return 'https://pub-e5dc5ebf430a493e98528ece772092b4.r2.dev/ejemplo1/metadata.json';
-    }
-  }
 
   window.viewer = new Potree.Viewer(document.getElementById("potree_render_area"));
   viewer.renderer.xr.enabled = true;
@@ -140,7 +130,7 @@
   viewer.setFOV(60);  // FOV más amplio para sensación más inmersiva
   viewer.setPointBudget(10_000_000);
 
-  viewer.setDescription(`Walker Mode: Experience the point cloud from ground level.
+  viewer.setDescription(`Corredor (1+2+3): combinación de las nubes 1, 2 y 3 como un único corredor.
             Use arrow keys or mouse to navigate. <br>
             Point cloud courtesy of <a href="http://www.helimap.com/">Helimap System SA</a>.`);
 
@@ -160,22 +150,11 @@
       else console.log("[VRMenu] vrControls no disponible aún");
     }
   });
-  
 
-  
-  
-  
-  
   // Recibe la selección de modo desde el menú VR de VRControls
   document.addEventListener('vr-mode-select', (e) => {
     if(e.detail.mode === 3) return; // modo puntos: no recargar la nube
     viewmode = e.detail.mode;
-    loadCloudMode(viewmode);
-  });
-
-  // Recibe la selección de nube desde el submenú VR
-  document.addEventListener('vr-cloud-select', (e) => {
-    cloudIndex = e.detail.cloud;
     loadCloudMode(viewmode);
   });
 
@@ -205,94 +184,11 @@
     }
   }
 
-  function loadCloudMode(viewmode) {
-    if (cloudIndex === 'corredor') { loadCorridorCloud(viewmode); return; }
-    clearPointClouds();
-    switch (viewmode) {
-
-      case 1: //Aerial mode
-        Potree.loadPointCloud(getCloudUrl(cloudIndex)).then(e => {
-          let pointcloud = e.pointcloud;
-          let material = e.pointcloud.material;
-          material.size = 1;
-          material.pointSizeType = Potree.PointSizeType.ADAPTIVE;
-          viewer.scene.addPointCloud(pointcloud);
-
-          // Forzar que matrixWorld esté actualizado antes de transformar el bbox
-          pointcloud.updateMatrixWorld(true);
-
-          // Transformar el boundingBox local de la nube a coordenadas mundo (UTM)
-          let bbox = pointcloud.boundingBox.clone();
-          bbox.applyMatrix4(pointcloud.matrixWorld);
-
-          let center = bbox.getCenter(new THREE.Vector3());
-          let size = bbox.getSize(new THREE.Vector3());
-          let distance = Math.max(size.x, size.y, size.z) * 1.2;
-
-          console.log(`[God] center=(${center.x.toFixed(0)},${center.y.toFixed(0)},${center.z.toFixed(0)}) size=(${size.x.toFixed(0)},${size.y.toFixed(0)},${size.z.toFixed(0)}) dist=${distance.toFixed(0)}`);
-
-          // Cámara diagonal arriba/atrás (Z = arriba en este sistema)
-          let camPos = new THREE.Vector3(
-            center.x + distance,
-            center.y - distance,
-            center.z + distance
-          );
-          viewer.scene.view.position.copy(camPos);
-          viewer.scene.view.lookAt(center);
-
-          viewer.scene.getActiveCamera().near = Math.max(0.1, distance / 1000);
-          viewer.scene.getActiveCamera().far = distance * 20;
-          viewer.scene.getActiveCamera().updateProjectionMatrix();
-
-          viewer.setMoveSpeed(distance / 5);
-          syncVRToScene();
-        });
-
-        break;
-      case 2: //walker mode
-        viewer.setControls(new Potree.FirstPersonControls(viewer));
-        Potree.loadPointCloud(getCloudUrl(cloudIndex)).then(e => {
-          let pointcloud = e.pointcloud;
-          let material = e.pointcloud.material;
-          material.size = 0.5;
-          material.pointSizeType = Potree.PointSizeType.ADAPTIVE;
-          viewer.scene.addPointCloud(pointcloud);
-          pointcloud.scale.set(10, 10, 10);
-          pointcloud.updateMatrix();
-
-          let bbox = pointcloud.boundingBox;
-          let size = bbox.getSize(new THREE.Vector3());
-
-          viewer.scene.getActiveCamera().near = 0.1;
-          viewer.scene.getActiveCamera().far = Math.max(size.x, size.y, size.z) * 10;
-          viewer.scene.getActiveCamera().updateProjectionMatrix();
-
-          let walkerCoords;
-          switch(cloudIndex) {
-            case 2:  walkerCoords = [426768.400, 4478215.481, 835.360  + 20.7]; break;
-            case 3:  walkerCoords = [424328.211, 4476365.500, 785.870  + 20.7]; break;
-            case 5:  walkerCoords = [425538.371, 4474447.171, 854.129  + 20.7]; break;
-            default: walkerCoords = [426808.02,  4478030.49,  1034.87  + 20.7]; break;
-          }
-          let camPos = new THREE.Vector3(...walkerCoords);
-          viewer.scene.view.position.copy(camPos);
-
-          let lookAtPos = camPos.clone();
-          lookAtPos.y += 1;
-          viewer.scene.view.lookAt(lookAtPos);
-          viewer.setMoveSpeed(10);
-          syncVRToScene();
-        });
-
-        break;
-    }
-  }
-
   // Carga combinada del corredor: nubes 1, 2 y 3 a la vez.
   // Comparten sistema de coordenadas UTM, así que en modo Dios encajan solas.
   // En modo Paseo se escalan x10 respecto a un pivote común (la nube 1) para
-  // conservar el teselado del corredor (ver PointCloudOctree.js:115).
-  function loadCorridorCloud(viewmode) {
+  // conservar el teselado del corredor (ver plan / PointCloudOctree.js:115).
+  function loadCloudMode(viewmode) {
     clearPointClouds();
     const base = 'https://pub-e5dc5ebf430a493e98528ece772092b4.r2.dev/';
     const urls = [

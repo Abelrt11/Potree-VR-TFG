@@ -1164,12 +1164,12 @@ export class VRControls extends EventDispatcher{
 		const bgMat = new THREE.MeshBasicMaterial({
 			color: 0x0d1b2e, transparent: true, opacity: 0.88, side: THREE.DoubleSide,
 		});
-		const bg = new THREE.Mesh(new THREE.PlaneGeometry(0.64, 0.68), bgMat);
+		const bg = new THREE.Mesh(new THREE.PlaneGeometry(0.64, 0.80), bgMat);
 		group.add(bg);
 
 		const title = new Potree.TextSprite('NUBE DE PUNTOS');
 		title.scale.set(0.07, 0.07, 0.07);
-		title.position.set(0, 0.30, 0.002);
+		title.position.set(0, 0.32, 0.002);
 		group.add(title);
 
 		const clouds = [
@@ -1177,10 +1177,12 @@ export class VRControls extends EventDispatcher{
 			{ label: 'Ejemplo 2', cloud: 2 },
 			{ label: 'Ejemplo 3', cloud: 3 },
 			{ label: 'Ejemplo 5', cloud: 5 },
+			{ label: 'Corredor', cloud: 'corredor' },
 		];
 		const positions = [
-			{ x: -0.17, y: 0.14 }, { x: 0.17, y: 0.14 },
-			{ x: -0.17, y: -0.01 }, { x: 0.17, y: -0.01 },
+			{ x: -0.17, y: 0.16 }, { x: 0.17, y: 0.16 },
+			{ x: -0.17, y: 0.02 }, { x: 0.17, y: 0.02 },
+			{ x: 0, y: -0.12 },
 		];
 
 		const btns = clouds.map(({ label, cloud }, i) => {
@@ -1192,7 +1194,7 @@ export class VRControls extends EventDispatcher{
 		});
 
 		const btnBack = this._createMenuButton('← Volver', 'BACK_TO_MAIN');
-		btnBack.position.set(0, -0.22, 0.002);
+		btnBack.position.set(0, -0.28, 0.002);
 		group.add(btnBack);
 
 		group.userData.interactives = [...btns, btnBack];
