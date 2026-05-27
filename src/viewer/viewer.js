@@ -2102,6 +2102,47 @@ export class Viewer extends EventDispatcher{
 			}
 		}
 
+		{ // render clip volumes (VR overlay)
+			const vScene = this.volumeTool && this.volumeTool.scene;
+			if(vScene && this.scene.volumes.length > 0){
+				let vcam = makeCam();
+				vcam.position.z -= 0.8 * vcam.scale.x;
+				vcam.parent = null;
+				vcam.near = this.scene.getActiveCamera().near;
+				vcam.far = this.scene.getActiveCamera().far;
+				vcam.updateMatrix();
+				vcam.updateMatrixWorld();
+
+				vScene.updateMatrix();
+				vScene.updateMatrixWorld();
+				vScene.matrixAutoUpdate = false;
+
+				let vview = vcam.matrixWorld.clone().invert();
+				vScene.matrix.copy(vview);
+				vScene.matrixWorld.copy(vview);
+
+				vcam.matrix.identity();
+				vcam.matrixWorld.identity();
+				vcam.matrixWorldInverse.identity();
+
+				try {
+					renderer.render(vScene, vcam);
+				} catch(e) {
+					console.log('[VRCLIP] ERROR render: ' + e.message);
+				} finally {
+					vScene.matrix.identity();
+					vScene.matrixWorld.identity();
+					vScene.matrixAutoUpdate = true;
+					// IMPORTANTE: restaurar el matrixWorld de los volúmenes a coordenadas de
+					// escena. El render anterior lo dejó en espacio de cámara, y
+					// Potree_update_visibility lee clipBox.box.matrixWorld en vivo para descartar
+					// nodos cuando clipTask = SHOW_INSIDE; en espacio de cámara el test nodo-vs-caja
+					// falla y descarta TODOS los nodos → "Solo interior" hace desaparecer todo.
+					vScene.updateMatrixWorld(true);
+				}
+			}
+		}
+
 		{ // render VR scene
 			let cam = makeCam();
 			cam.parent = null;
