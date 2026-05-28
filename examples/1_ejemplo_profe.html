@@ -207,6 +207,8 @@
 
   function loadCloudMode(viewmode) {
     if (cloudIndex === 'corredor') { loadCorridorCloud(viewmode); return; }
+    if (cloudIndex === 'gran_corredor') { loadGranCorridorCloud(viewmode); return; }
+    if (cloudIndex === 'gran_corredor_2') { loadGranCorridor2Cloud(viewmode); return; }
     clearPointClouds();
     switch (viewmode) {
 
@@ -364,6 +366,155 @@
 
         // Entrada = misma posición que la nube 1 en solitario (es el pivote)
         const camPos = new THREE.Vector3(426808.02, 4478030.49, 1034.87 + 20.7);
+        viewer.scene.view.position.copy(camPos);
+
+        const lookAtPos = camPos.clone();
+        lookAtPos.y += 1;
+        viewer.scene.view.lookAt(lookAtPos);
+        viewer.setMoveSpeed(10);
+      }
+      syncVRToScene();
+    });
+  }
+
+  // Carga combinada del "Gran Corredor": 10 partes (parte1..parte10) desde R2.
+  // Misma estrategia que loadCorridorCloud (3 partes): en Dios encuadre del bbox unión;
+  // en Paseo escala x10 con pivote en la parte 1 y entrada calculada dinámicamente
+  // desde el bbox de la parte 1 (no hay coordenadas UTM hardcodeadas).
+  function loadGranCorridorCloud(viewmode) {
+    clearPointClouds();
+    const base = 'https://pub-e5dc5ebf430a493e98528ece772092b4.r2.dev/gran_corredor/';
+    const urls = [];
+    for (let i = 1; i <= 10; i++) urls.push(`${base}parte${i}/metadata.json`);
+
+    if (viewmode === 2) viewer.setControls(new Potree.FirstPersonControls(viewer));
+
+    Promise.all(urls.map(u => Potree.loadPointCloud(u))).then(results => {
+      const pcs = results.map(r => r.pointcloud);
+      for (const pc of pcs) {
+        pc.material.pointSizeType = Potree.PointSizeType.ADAPTIVE;
+        pc.material.size = (viewmode === 1) ? 1 : 0.5;
+        viewer.scene.addPointCloud(pc);
+      }
+
+      if (viewmode === 1) { // ---- Modo Dios (aéreo): posiciones naturales + encuadre del bbox unión
+        let union = null;
+        for (const pc of pcs) {
+          pc.updateMatrixWorld(true);
+          const b = pc.boundingBox.clone().applyMatrix4(pc.matrixWorld);
+          union = union ? union.union(b) : b;
+        }
+        const center = union.getCenter(new THREE.Vector3());
+        const size = union.getSize(new THREE.Vector3());
+        const distance = Math.max(size.x, size.y, size.z) * 1.2;
+
+        console.log(`[GranCorredor/God] center=(${center.x.toFixed(0)},${center.y.toFixed(0)},${center.z.toFixed(0)}) size=(${size.x.toFixed(0)},${size.y.toFixed(0)},${size.z.toFixed(0)}) dist=${distance.toFixed(0)}`);
+
+        const camPos = new THREE.Vector3(
+          center.x + distance,
+          center.y - distance,
+          center.z + distance
+        );
+        viewer.scene.view.position.copy(camPos);
+        viewer.scene.view.lookAt(center);
+
+        viewer.scene.getActiveCamera().near = Math.max(0.1, distance / 1000);
+        viewer.scene.getActiveCamera().far = distance * 20;
+        viewer.scene.getActiveCamera().updateProjectionMatrix();
+
+        viewer.setMoveSpeed(distance / 5);
+      } else { // ---- Modo Paseo (walker): escala x10 respecto a pivote común (parte 1)
+        const pivot = pcs[0].position.clone();
+        for (const pc of pcs) {
+          const off = pc.position.clone();
+          pc.scale.set(10, 10, 10);
+          pc.position.set(
+            10 * off.x - 9 * pivot.x,
+            10 * off.y - 9 * pivot.y,
+            10 * off.z - 9 * pivot.z
+          );
+          pc.updateMatrix();
+        }
+
+        let union = null;
+        for (const pc of pcs) {
+          pc.updateMatrixWorld(true);
+          const b = pc.boundingBox.clone().applyMatrix4(pc.matrixWorld);
+          union = union ? union.union(b) : b;
+        }
+        const size = union.getSize(new THREE.Vector3());
+
+        viewer.scene.getActiveCamera().near = 0.1;
+        viewer.scene.getActiveCamera().far = Math.max(size.x, size.y, size.z) * 10;
+        viewer.scene.getActiveCamera().updateProjectionMatrix();
+
+        // Entrada de Paseo fijada por el usuario (UTM ground + 20.7 de altura de ojos en coords escaladas x10)
+        const camPos = new THREE.Vector3(280617.970, 4413806.330, 447.060 + 20.7);
+        console.log(`[GranCorredor/Walker] camPos=(${camPos.x.toFixed(3)},${camPos.y.toFixed(3)},${camPos.z.toFixed(3)})`);
+        viewer.scene.view.position.copy(camPos);
+
+        const lookAtPos = camPos.clone();
+        lookAtPos.y += 1;
+        viewer.scene.view.lookAt(lookAtPos);
+        viewer.setMoveSpeed(10);
+      }
+      syncVRToScene();
+    });
+  }
+
+  // Carga del "Gran Corredor 2": una sola nube (todo el corredor en un único archivo).
+  // Misma lógica que las nubes individuales pero con entrada de Paseo calculada
+  // dinámicamente desde el bbox (sin coordenadas UTM hardcodeadas).
+  function loadGranCorridor2Cloud(viewmode) {
+    clearPointClouds();
+    const url = 'https://pub-e5dc5ebf430a493e98528ece772092b4.r2.dev/gran_corredor_2/metadata.json';
+
+    if (viewmode === 2) viewer.setControls(new Potree.FirstPersonControls(viewer));
+
+    Potree.loadPointCloud(url).then(e => {
+      const pointcloud = e.pointcloud;
+      const material = e.pointcloud.material;
+      material.pointSizeType = Potree.PointSizeType.ADAPTIVE;
+      material.size = (viewmode === 1) ? 1 : 0.5;
+      viewer.scene.addPointCloud(pointcloud);
+
+      if (viewmode === 1) { // ---- Modo Dios (aéreo)
+        pointcloud.updateMatrixWorld(true);
+        const bbox = pointcloud.boundingBox.clone().applyMatrix4(pointcloud.matrixWorld);
+        const center = bbox.getCenter(new THREE.Vector3());
+        const size = bbox.getSize(new THREE.Vector3());
+        const distance = Math.max(size.x, size.y, size.z) * 1.2;
+
+        console.log(`[GranCorredor2/God] center=(${center.x.toFixed(0)},${center.y.toFixed(0)},${center.z.toFixed(0)}) size=(${size.x.toFixed(0)},${size.y.toFixed(0)},${size.z.toFixed(0)}) dist=${distance.toFixed(0)}`);
+
+        const camPos = new THREE.Vector3(
+          center.x + distance,
+          center.y - distance,
+          center.z + distance
+        );
+        viewer.scene.view.position.copy(camPos);
+        viewer.scene.view.lookAt(center);
+
+        viewer.scene.getActiveCamera().near = Math.max(0.1, distance / 1000);
+        viewer.scene.getActiveCamera().far = distance * 20;
+        viewer.scene.getActiveCamera().updateProjectionMatrix();
+
+        viewer.setMoveSpeed(distance / 5);
+      } else { // ---- Modo Paseo (walker): escala x10 como las nubes individuales
+        pointcloud.scale.set(10, 10, 10);
+        pointcloud.updateMatrix();
+        pointcloud.updateMatrixWorld(true);
+
+        const bbox = pointcloud.boundingBox.clone().applyMatrix4(pointcloud.matrixWorld);
+        const size = bbox.getSize(new THREE.Vector3());
+
+        viewer.scene.getActiveCamera().near = 0.1;
+        viewer.scene.getActiveCamera().far = Math.max(size.x, size.y, size.z) * 10;
+        viewer.scene.getActiveCamera().updateProjectionMatrix();
+
+        // Entrada de Paseo fijada por el usuario (UTM ground + 20.7 de altura de ojos en coords escaladas x10)
+        const camPos = new THREE.Vector3(454491.539, 3109992.743, 2556.448 + 20.7);
+        console.log(`[GranCorredor2/Walker] camPos=(${camPos.x.toFixed(3)},${camPos.y.toFixed(3)},${camPos.z.toFixed(3)})`);
         viewer.scene.view.position.copy(camPos);
 
         const lookAtPos = camPos.clone();
