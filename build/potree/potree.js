@@ -87642,10 +87642,20 @@ ENDSEC
 			this._clipDragging = null;    // { entry, axisIndex } durante el arrastre
 			this._clipHovered = null;     // tirador resaltado
 
+			// Edición de classification por punto
+			this.editClassMode = false;
+			this.editClassMenu = null;
+			this.editClassTarget = null;        // { code:int, name:string }
+			this.editClassPreviewMeasure = null;
+			this.editClassLog = [];             // [{x,y,z,fromCode,toCode,fromName,toName,ts}]
+			this.editClassOverrides = new Map();// key: "x|y|z" en coords del pointcloud → newCode
+			this._editClassProcessedNodes = new WeakSet();
+
 			document.addEventListener('vr-mode-select', (e) => {
 				if(e.detail.mode !== 3 && this.pointsMode) this._finishMeasurement();
 				this.pointsMode = (e.detail.mode === 3);
 				if(this.infoPointMode){ this.infoPointMode = false; this._clearInfoPreview(); }
+				if(this.editClassMode){ this.editClassMode = false; this._clearEditClassPreview(); }
 			});
 		}
 
@@ -87706,6 +87716,7 @@ ENDSEC
 			this._createCloudMenu();
 			this._createClipMenu();
 			this._createClipTaskMenu();
+			this._createEditClassMenu();
 		}
 
 		_createVRMenu(){
@@ -87713,7 +87724,7 @@ ENDSEC
 			group.name = 'vr-mode-menu';
 			group.visible = false;
 
-			// Fondo del panel (ampliado para 7 botones)
+			// Fondo del panel (ampliado para 8 botones)
 			const bgMat = new MeshBasicMaterial({
 				color: 0x0d1b2e,
 				transparent: true,
@@ -87729,7 +87740,7 @@ ENDSEC
 			title.position.set(0, 0.34, 0.002);
 			group.add(title);
 
-			// Grid 3x2: Paseo | Aéreo / Medidas | Apariencia / Atributo | Recortado
+			// Grid 4x2: Paseo | Aéreo / Medidas | Apariencia / Atributo | Recortado / Cambiar nube | Editar Clasif.
 			const btnWalk = this._createMenuButton('Modo Paseo', 2);
 			btnWalk.position.set(-0.17, 0.16, 0.002);
 			group.add(btnWalk);
@@ -87755,24 +87766,29 @@ ENDSEC
 			group.add(btnClip);
 
 			const btnChangeCloud = this._createMenuButton('Cambiar nube\nde puntos', 'OPEN_CLOUD_MENU');
-			btnChangeCloud.position.set(0, -0.32, 0.002);
+			btnChangeCloud.position.set(-0.17, -0.32, 0.002);
 			group.add(btnChangeCloud);
 
-			group.userData.interactives = [btnWalk, btnGod, btnPoints, btnAppearance, btnAttribute, btnClip, btnChangeCloud];
+			const btnEditClass = this._createMenuButton('Editar\nClasificación', 'OPEN_EDIT_CLASS');
+			btnEditClass.position.set(0.17, -0.32, 0.002);
+			group.add(btnEditClass);
+
+			group.userData.interactives = [btnWalk, btnGod, btnPoints, btnAppearance, btnAttribute, btnClip, btnChangeCloud, btnEditClass];
 			this.viewer.sceneVR.add(group);
 			this.mainMenu = group;
 			window.vrMenu = group;
 		}
 
-		_createMenuButton(label, modeId){
+		_createMenuButton(label, modeId, opts){
+			opts = opts || {};
 			const canvas = document.createElement('canvas');
-			canvas.width = 256;
-			canvas.height = 128;
+			canvas.width = opts.canvasW || 256;
+			canvas.height = opts.canvasH || 128;
 			this._drawButtonCanvas(canvas, label, false);
 
 			const tex = new CanvasTexture(canvas);
 			const mat = new MeshBasicMaterial({ map: tex, transparent: true });
-			const mesh = new Mesh(new PlaneGeometry(0.28, 0.14), mat);
+			const mesh = new Mesh(new PlaneGeometry(opts.width || 0.28, opts.height || 0.14), mat);
 			mesh.userData = {
 				modeId, label, canvas, tex, hovered: false,
 				redraw: (h) => { this._drawButtonCanvas(canvas, label, h); tex.needsUpdate = true; },
@@ -87782,12 +87798,13 @@ ENDSEC
 
 		_drawButtonCanvas(canvas, label, highlighted){
 			const ctx = canvas.getContext('2d');
-			ctx.clearRect(0, 0, 256, 128);
+			const W = canvas.width, H = canvas.height;
+			ctx.clearRect(0, 0, W, H);
 			ctx.fillStyle = highlighted ? '#2255bb' : '#162538';
-			ctx.fillRect(0, 0, 256, 128);
+			ctx.fillRect(0, 0, W, H);
 			ctx.strokeStyle = highlighted ? '#88ccff' : '#3a6090';
 			ctx.lineWidth = 5;
-			ctx.strokeRect(3, 3, 250, 122);
+			ctx.strokeRect(3, 3, W - 6, H - 6);
 			ctx.fillStyle = '#ffffff';
 			ctx.textAlign = 'center';
 			ctx.textBaseline = 'middle';
@@ -87795,12 +87812,12 @@ ENDSEC
 			const lines = label.split('\n');
 			if(lines.length === 1){
 				ctx.font = 'bold 34px Arial, sans-serif';
-				ctx.fillText(label, 128, 64);
+				ctx.fillText(label, W / 2, H / 2);
 			} else {
 				ctx.font = 'bold 26px Arial, sans-serif';
 				const lineH = 34;
-				const startY = 64 - ((lines.length - 1) * lineH) / 2;
-				lines.forEach((line, i) => ctx.fillText(line, 128, startY + i * lineH));
+				const startY = H / 2 - ((lines.length - 1) * lineH) / 2;
+				lines.forEach((line, i) => ctx.fillText(line, W / 2, startY + i * lineH));
 			}
 		}
 
@@ -87933,6 +87950,7 @@ ENDSEC
 			if(this.cloudMenu) this.cloudMenu.visible = false;
 			if(this.clipMenu) this.clipMenu.visible = false;
 			if(this.clipTaskMenu) this.clipTaskMenu.visible = false;
+			if(this.editClassMenu) this.editClassMenu.visible = false;
 			this.activeMenu = null;
 			this._setLaserLength(false);
 		}
@@ -88407,6 +88425,74 @@ ENDSEC
 			this.cloudMenu = group;
 		}
 
+		_createEditClassMenu(){
+			const group = new Group();
+			group.name = 'vr-edit-class-menu';
+			group.visible = false;
+
+			const bgMat = new MeshBasicMaterial({
+				color: 0x0d1b2e, transparent: true, opacity: 0.88, side: DoubleSide,
+			});
+			const bg = new Mesh(new PlaneGeometry(1.20, 1.45), bgMat);
+			group.add(bg);
+
+			const title = new Potree.TextSprite('EDITAR CLASIFICACIÓN');
+			title.scale.set(0.10, 0.10, 0.10);
+			title.position.set(0, 0.62, 0.002);
+			group.add(title);
+
+			const hint = new Potree.TextSprite('Elige una clase, apunta y pulsa trigger');
+			hint.scale.set(0.06, 0.06, 0.06);
+			hint.position.set(0, 0.53, 0.002);
+			group.add(hint);
+
+			// Lista de clases del ClassificationScheme DEFAULT (códigos numéricos)
+			const scheme = this.viewer.classifications;
+			const codes = Object.keys(scheme)
+				.filter(k => k !== 'DEFAULT' && !Number.isNaN(Number(k)))
+				.map(k => Number(k))
+				.sort((a, b) => a - b);
+
+			const interactives = [];
+			const COLS = 2;
+			const ROW_H = 0.155;
+			const Y0 = 0.40;
+			const btnOpts = { width: 0.52, height: 0.14, canvasW: 464 };
+			codes.forEach((code, i) => {
+				const cls = scheme[code];
+				const name = cls && cls.name ? cls.name : ('clase ' + code);
+				const label = `${code}: ${name}`;
+				const btn = this._createMenuButton(label, 'EDIT_CLASS_SET_TARGET', btnOpts);
+				btn.userData.classCode = code;
+				btn.userData.className = name;
+				const col = i % COLS;
+				const row = Math.floor(i / COLS);
+				const x = col === 0 ? -0.29 : 0.29;
+				const y = Y0 - row * ROW_H;
+				btn.position.set(x, y, 0.002);
+				group.add(btn);
+				interactives.push(btn);
+			});
+
+			// Botón "Exportar log .txt"
+			const btnExport = this._createMenuButton('Exportar log .txt', 'EDIT_CLASS_EXPORT_LOG',
+				{ width: 0.40, height: 0.14, canvasW: 360 });
+			btnExport.position.set(-0.29, -0.58, 0.002);
+			group.add(btnExport);
+			interactives.push(btnExport);
+
+			// Botón "Volver"
+			const btnBack = this._createMenuButton('← Volver', 'BACK_TO_MAIN',
+				{ width: 0.40, height: 0.14, canvasW: 360 });
+			btnBack.position.set(0.29, -0.58, 0.002);
+			group.add(btnBack);
+			interactives.push(btnBack);
+
+			group.userData.interactives = interactives;
+			this.viewer.sceneVR.add(group);
+			this.editClassMenu = group;
+		}
+
 		_buildAttrControls(attr){
 			const region = this._attrControls;
 			if(!region) return;
@@ -88655,6 +88741,20 @@ ENDSEC
 						return;
 					}
 
+					// Edición de clasificación
+					if(ud.modeId === 'OPEN_EDIT_CLASS'){
+						this._showMenu(this.editClassMenu);
+						return;
+					}
+					if(ud.modeId === 'EDIT_CLASS_SET_TARGET'){
+						this._setEditClassTarget(ud.classCode, ud.className);
+						return;
+					}
+					if(ud.modeId === 'EDIT_CLASS_EXPORT_LOG'){
+						this._exportEditClassLog();
+						return;
+					}
+
 					// Handle de slider → iniciar drag
 					if(ud.role === 'handle'){
 						const slider = ud.parentSlider;
@@ -88716,6 +88816,11 @@ ENDSEC
 				return;
 			}
 
+			if(this.editClassMode){
+				this._applyEditClassAtController(controller);
+				return;
+			}
+
 			if(this.pointsMode){
 				this._placeVRPoint(controller);
 				return;
@@ -88762,6 +88867,12 @@ ENDSEC
 			if(this.infoPointMode){
 				this.infoPointMode = false;
 				this._clearInfoPreview();
+				return;
+			}
+
+			if(this.editClassMode){
+				this.editClassMode = false;
+				this._clearEditClassPreview();
 				return;
 			}
 
@@ -88972,6 +89083,7 @@ ENDSEC
 			let bestPerp2 = Infinity;
 			let bestNode = null;
 			let bestIdx = -1;
+			let bestPc = null;
 
 			for(const pc of this.viewer.scene.pointclouds){
 				const nodes = pc.nodesOnRay(pc.visibleNodes, ray);
@@ -88988,7 +89100,7 @@ ENDSEC
 						const t = dx * ray.direction.x + dy * ray.direction.y + dz * ray.direction.z;
 						if(t <= 0) continue;
 						const perp2 = dx*dx + dy*dy + dz*dz - t*t;
-						if(perp2 < bestPerp2){ bestPerp2 = perp2; bestPoint = tmp.clone(); bestNode = node; bestIdx = i; }
+						if(perp2 < bestPerp2){ bestPerp2 = perp2; bestPoint = tmp.clone(); bestNode = node; bestIdx = i; bestPc = pc; }
 					}
 				}
 			}
@@ -89005,7 +89117,7 @@ ENDSEC
 				attrs[attrName] = vals;
 			}
 
-			return { position: bestPoint, attrs };
+			return { position: bestPoint, attrs, node: bestNode, pIndex: bestIdx, pointcloud: bestPc };
 		}
 
 		_startInfoPointMode(){
@@ -89160,6 +89272,10 @@ ENDSEC
 			if(this.infoPointMode){
 				this.infoPointMode = false;
 			}
+			if(this.editClassMode){
+				this.editClassMode = false;
+				this.editClassPreviewMeasure = null;
+			}
 			// Limpiar referencias propias antes de borrar (removeMeasurement dispara eventos)
 			this.infoPointMeasure = null;
 			this.infoPreviewMeasure = null;
@@ -89169,6 +89285,132 @@ ENDSEC
 			for(const m of all){
 				this.viewer.scene.removeMeasurement(m);
 			}
+		}
+
+		// ===== Edición de classification por punto =====
+
+		_classNameForCode(code){
+			const scheme = this.viewer.classifications;
+			const entry = scheme && scheme[code];
+			return (entry && entry.name) ? entry.name : ('clase ' + code);
+		}
+
+		_setEditClassTarget(code, name){
+			// Salir de modos incompatibles
+			if(this.pointsMode) this._finishMeasurement();
+			if(this.infoPointMode){ this.infoPointMode = false; this._clearInfoPreview(); }
+			this.editClassTarget = { code, name: name || this._classNameForCode(code) };
+			this.editClassMode = true;
+			this._clearEditClassPreview();
+			this._hideAllMenus();
+		}
+
+		_clearEditClassPreview(){
+			if(this.editClassPreviewMeasure){
+				this.viewer.scene.removeMeasurement(this.editClassPreviewMeasure);
+				this.editClassPreviewMeasure = null;
+			}
+		}
+
+		// Convierte una posición en mundo a coordenadas del pointcloud y devuelve la clave del Map
+		_overrideKey(pointcloud, worldPos){
+			const inv = pointcloud.matrixWorld.clone().invert();
+			const local = worldPos.clone().applyMatrix4(inv);
+			return `${local.x.toFixed(6)}|${local.y.toFixed(6)}|${local.z.toFixed(6)}`;
+		}
+
+		_applyEditClassAtController(controller){
+			if(!this.editClassTarget) return;
+			const result = this._raycastPointCloudsWithAttrs(controller);
+			if(!result) return;
+
+			const { position, node, pIndex, pointcloud } = result;
+			if(!node || !node.sceneNode) return;
+			const geom = node.sceneNode.geometry;
+			const classAttr = geom && geom.attributes && geom.attributes.classification;
+			if(!classAttr){
+				console.log('[EditClass] el nodo no tiene atributo classification');
+				return;
+			}
+
+			const oldCode = classAttr.array[pIndex];
+			const newCode = this.editClassTarget.code;
+			if(oldCode === newCode) return;
+
+			const pc = pointcloud || this.viewer.scene.pointclouds[0];
+
+			// Escribir en el buffer + marcar para subida a GPU
+			classAttr.array[pIndex] = newCode;
+			classAttr.needsUpdate = true;
+
+			// Guardar override (para reaplicar tras recarga de nodos)
+			const key = this._overrideKey(pc, position);
+			this.editClassOverrides.set(key, newCode);
+
+			// Entrada en el log
+			const fromName = this._classNameForCode(oldCode);
+			const toName = this.editClassTarget.name;
+			this.editClassLog.push({
+				x: position.x, y: position.y, z: position.z,
+				fromCode: oldCode, toCode: newCode,
+				fromName, toName,
+				ts: new Date().toISOString(),
+			});
+
+			// Feedback háptico breve si el dispositivo lo soporta
+			try {
+				const ga = controller && controller.inputSource && controller.inputSource.gamepad;
+				const act = ga && ga.hapticActuators && ga.hapticActuators[0];
+				if(act && act.pulse) act.pulse(0.5, 60);
+			} catch(_) {}
+		}
+
+		_exportEditClassLog(){
+			if(this.editClassLog.length === 0){
+				console.log('[EditClass] no hay cambios para exportar');
+				return;
+			}
+			const lines = this.editClassLog.map(e =>
+				`el punto en (${e.x.toFixed(4)}, ${e.y.toFixed(4)}, ${e.z.toFixed(4)}) cambió: classification '${e.fromName}' -> '${e.toName}'`
+			);
+			const text = lines.join('\n') + '\n';
+			const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+			const url = window.URL.createObjectURL(blob);
+			const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+			const a = document.createElement('a');
+			a.href = url;
+			a.download = `edit_classification_log_${stamp}.txt`;
+			document.body.appendChild(a);
+			a.click();
+			document.body.removeChild(a);
+			setTimeout(() => window.URL.revokeObjectURL(url), 1000);
+		}
+
+		// Reaplica los overrides al buffer de un nodo recién cargado/visible
+		_reapplyEditClassOverridesToNode(node, pc){
+			if(this.editClassOverrides.size === 0) return;
+			if(!node || !node.sceneNode) return;
+			const geom = node.sceneNode.geometry;
+			const posAttr = geom && geom.attributes && geom.attributes.position;
+			const classAttr = geom && geom.attributes && geom.attributes.classification;
+			if(!posAttr || !classAttr) return;
+
+			// Matriz que lleva coords locales del nodo a coords del pointcloud
+			const inv = pc.matrixWorld.clone().invert();
+			const m = new Matrix4().multiplyMatrices(inv, node.sceneNode.matrixWorld);
+			const tmp = new Vector3();
+
+			let modified = false;
+			for(let i = 0; i < posAttr.count; i++){
+				tmp.fromBufferAttribute(posAttr, i).applyMatrix4(m);
+				const key = `${tmp.x.toFixed(6)}|${tmp.y.toFixed(6)}|${tmp.z.toFixed(6)}`;
+				const newCode = this.editClassOverrides.get(key);
+				if(newCode !== undefined && classAttr.array[i] !== newCode){
+					classAttr.array[i] = newCode;
+					modified = true;
+				}
+			}
+			if(modified) classAttr.needsUpdate = true;
 		}
 
 		// ===== Recortado de zonas (clipping con cubo) =====
@@ -89440,6 +89682,34 @@ ENDSEC
 						this.infoPreviewMeasure = m;
 					} else {
 						this.infoPreviewMeasure.setPosition(0, pos);
+					}
+				}
+			}
+
+			// Preview del modo Editar Clasificación
+			if(this.editClassMode && !(this.activeMenu && this.activeMenu.visible)){
+				const pos = this._raycastPointClouds(pointer);
+				if(pos){
+					if(!this.editClassPreviewMeasure){
+						const m = this._buildInfoMeasure(0xff00ff);
+						this.viewer.scene.addMeasurement(m);
+						m.addMarker(pos);
+						this.editClassPreviewMeasure = m;
+					} else {
+						this.editClassPreviewMeasure.setPosition(0, pos);
+					}
+				}
+			}
+
+			// Reaplicar overrides de classification a nodos recién cargados
+			if(this.editClassOverrides.size > 0){
+				for(const pc of this.viewer.scene.pointclouds){
+					const visible = pc.visibleNodes || [];
+					for(const node of visible){
+						if(!node || !node.sceneNode) continue;
+						if(this._editClassProcessedNodes.has(node.sceneNode)) continue;
+						this._reapplyEditClassOverridesToNode(node, pc);
+						this._editClassProcessedNodes.add(node.sceneNode);
 					}
 				}
 			}
