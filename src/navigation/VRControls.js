@@ -441,6 +441,11 @@ export class VRControls extends EventDispatcher{
 		this.activeMeasurement = null;
 		this.measureType = 'distance';
 
+		// Punto de información
+		this.infoPointMode = false;
+		this.infoPointMeasure = null;    // Potree.Measure (esfera + label) una vez colocado
+		this.infoPreviewMeasure = null;  // Potree.Measure de la esfera fantasma mientras se apunta
+
 		// Recortado de zonas (clipping con cubo)
 		this.clipMode = false;
 		this.clipBoxes = [];          // [{ volume, handles: [6 meshes] }]
@@ -453,6 +458,7 @@ export class VRControls extends EventDispatcher{
 		document.addEventListener('vr-mode-select', (e) => {
 			if(e.detail.mode !== 3 && this.pointsMode) this._finishMeasurement();
 			this.pointsMode = (e.detail.mode === 3);
+			if(this.infoPointMode){ this.infoPointMode = false; this._clearInfoPreview(); }
 		});
 	}
 
@@ -1007,27 +1013,35 @@ export class VRControls extends EventDispatcher{
 			opacity: 0.88,
 			side: THREE.DoubleSide,
 		});
-		const bg = new THREE.Mesh(new THREE.PlaneGeometry(0.64, 0.58), bgMat);
+		const bg = new THREE.Mesh(new THREE.PlaneGeometry(0.64, 0.90), bgMat);
 		group.add(bg);
 
 		const title = new Potree.TextSprite('MEDIDAS');
 		title.scale.set(0.07, 0.07, 0.07);
-		title.position.set(0, 0.21, 0.002);
+		title.position.set(0, 0.35, 0.002);
 		group.add(title);
 
 		const btnDistance = this._createMenuButton('Medir Distancias', 'MEASURE_DISTANCE');
-		btnDistance.position.set(0, 0.07, 0.002);
+		btnDistance.position.set(0, 0.20, 0.002);
 		group.add(btnDistance);
 
 		const btnHeight = this._createMenuButton('Medir Alturas', 'MEASURE_HEIGHT');
-		btnHeight.position.set(0, -0.08, 0.002);
+		btnHeight.position.set(0, 0.05, 0.002);
 		group.add(btnHeight);
 
+		const btnInfo = this._createMenuButton('Punto de Info', 'MEASURE_INFO_POINT');
+		btnInfo.position.set(0, -0.10, 0.002);
+		group.add(btnInfo);
+
+		const btnDelete = this._createMenuButton('Eliminar Puntos', 'MEASURE_DELETE_ALL');
+		btnDelete.position.set(0, -0.25, 0.002);
+		group.add(btnDelete);
+
 		const btnBack = this._createMenuButton('← Volver', 'BACK_TO_MAIN');
-		btnBack.position.set(0, -0.22, 0.002);
+		btnBack.position.set(0, -0.39, 0.002);
 		group.add(btnBack);
 
-		group.userData.interactives = [btnDistance, btnHeight, btnBack];
+		group.userData.interactives = [btnDistance, btnHeight, btnInfo, btnDelete, btnBack];
 		this.viewer.sceneVR.add(group);
 		this.measureMenu = group;
 	}
@@ -1445,6 +1459,14 @@ export class VRControls extends EventDispatcher{
 					this._startMeasureMode('height');
 					return;
 				}
+				if(ud.modeId === 'MEASURE_INFO_POINT'){
+					this._startInfoPointMode();
+					return;
+				}
+				if(ud.modeId === 'MEASURE_DELETE_ALL'){
+					this._deleteAllMeasurements();
+					return;
+				}
 
 				// Handle de slider → iniciar drag
 				if(ud.role === 'handle'){
@@ -1502,6 +1524,11 @@ export class VRControls extends EventDispatcher{
 			return;
 		}
 
+		if(this.infoPointMode){
+			this._placeInfoPoint(controller);
+			return;
+		}
+
 		if(this.pointsMode){
 			this._placeVRPoint(controller);
 			return;
@@ -1542,6 +1569,12 @@ export class VRControls extends EventDispatcher{
 
 		if(this.pointsMode){
 			this._finishMeasurement();
+			return;
+		}
+
+		if(this.infoPointMode){
+			this.infoPointMode = false;
+			this._clearInfoPreview();
 			return;
 		}
 
@@ -1732,6 +1765,223 @@ export class VRControls extends EventDispatcher{
 		}
 		this.activeMeasurement = null;
 		this.pointsMode = false;
+	}
+
+	// ===== Punto de información =====
+
+	_raycastPointCloudsWithAttrs(controller){
+		const originVR = new THREE.Vector3();
+		const quat = new THREE.Quaternion();
+		controller.getWorldPosition(originVR);
+		controller.getWorldQuaternion(quat);
+
+		const dirVR = new THREE.Vector3(0, 0, -1).applyQuaternion(quat);
+		const originWorld = this.toScene(originVR);
+		const dirWorld = this.toScene(originVR.clone().add(dirVR)).sub(originWorld).normalize();
+
+		const ray = new THREE.Ray(originWorld, dirWorld);
+		const tmp = new THREE.Vector3();
+		let bestPoint = null;
+		let bestPerp2 = Infinity;
+		let bestNode = null;
+		let bestIdx = -1;
+
+		for(const pc of this.viewer.scene.pointclouds){
+			const nodes = pc.nodesOnRay(pc.visibleNodes, ray);
+			for(const node of nodes){
+				if(!node.sceneNode) continue;
+				const posAttr = node.sceneNode.geometry && node.sceneNode.geometry.attributes && node.sceneNode.geometry.attributes.position;
+				if(!posAttr) continue;
+				const mat = node.sceneNode.matrixWorld;
+				for(let i = 0; i < posAttr.count; i += 10){
+					tmp.fromBufferAttribute(posAttr, i).applyMatrix4(mat);
+					const dx = tmp.x - ray.origin.x;
+					const dy = tmp.y - ray.origin.y;
+					const dz = tmp.z - ray.origin.z;
+					const t = dx * ray.direction.x + dy * ray.direction.y + dz * ray.direction.z;
+					if(t <= 0) continue;
+					const perp2 = dx*dx + dy*dy + dz*dz - t*t;
+					if(perp2 < bestPerp2){ bestPerp2 = perp2; bestPoint = tmp.clone(); bestNode = node; bestIdx = i; }
+				}
+			}
+		}
+
+		if(!bestPoint) return null;
+
+		const attrs = {};
+		const geomAttrs = bestNode.sceneNode.geometry.attributes;
+		for(const attrName in geomAttrs){
+			if(attrName === 'position' || attrName === 'indices') continue;
+			const attr = geomAttrs[attrName];
+			const vals = [];
+			for(let j = 0; j < attr.itemSize; j++) vals.push(attr.array[bestIdx * attr.itemSize + j]);
+			attrs[attrName] = vals;
+		}
+
+		return { position: bestPoint, attrs };
+	}
+
+	_startInfoPointMode(){
+		if(this.pointsMode) this._finishMeasurement();
+		this.infoPointMode = true;
+		this._hideAllMenus();
+	}
+
+	_clearInfoPreview(){
+		if(this.infoPreviewMeasure){
+			this.viewer.scene.removeMeasurement(this.infoPreviewMeasure);
+			this.infoPreviewMeasure = null;
+		}
+	}
+
+	_clearInfoPoint(){
+		if(this.infoPointMeasure){
+			this.viewer.scene.removeMeasurement(this.infoPointMeasure);
+			this.infoPointMeasure = null;
+		}
+		this._clearInfoPreview();
+	}
+
+	_buildInfoMeasure(color){
+		const m = new Potree.Measure();
+		m.showDistances = false;
+		m.showHeight = false;
+		m.showArea = false;
+		m.showCoordinates = false;
+		m.showAngles = false;
+		m.showCircle = false;
+		m.showAzimuth = false;
+		m.showEdges = false;
+		m.closed = false;
+		m.maxMarkers = 1;
+		m.color = new THREE.Color(color);
+		const pc = this.viewer.scene.pointclouds[0];
+		if(pc && pc.scale.x > 1.5) m.scaleDivisor = pc.scale.x;
+		return m;
+	}
+
+	_createInfoLabel(position, attrs, worldScale){
+		const LABELS = {
+			'intensity':         'Intensity',
+			'return number':     'Return No.',
+			'number of returns': 'N. Returns',
+			'classification':    'Classif.',
+			'scan angle rank':   'Scan Angle',
+			'user data':         'User Data',
+			'source id':         'Src. ID',
+			'gps-time':          'GPS-Time',
+			'gps time':          'GPS-Time',
+			'color':             'RGB',
+			'rgba':              'RGB',
+			'rgb':               'RGB',
+		};
+
+		const lines = ['PUNTO DE INFO'];
+		lines.push(`X: ${position.x.toFixed(2)}`);
+		lines.push(`Y: ${position.y.toFixed(2)}`);
+		lines.push(`Z: ${position.z.toFixed(2)}`);
+
+		for(const [key, vals] of Object.entries(attrs)){
+			const label = LABELS[key];
+			if(!label) continue;
+			let valStr;
+			if(key === 'color' || key === 'rgba' || key === 'rgb'){
+				const r = Math.round(vals[0] <= 1 ? vals[0] * 255 : vals[0]);
+				const g = Math.round(vals[1] <= 1 ? vals[1] * 255 : vals[1]);
+				const b = Math.round(vals[2] <= 1 ? vals[2] * 255 : vals[2]);
+				valStr = `${r}, ${g}, ${b}`;
+			} else {
+				const v = vals[0];
+				valStr = Number.isFinite(v) ? (Number.isInteger(v) ? String(v) : v.toFixed(4)) : '—';
+			}
+			lines.push(`${label}: ${valStr}`);
+		}
+
+		const fontSize = 28;
+		const lineH = Math.round(fontSize * 1.4);
+		const paddingX = 16;
+		const paddingY = 12;
+
+		const measureCanvas = document.createElement('canvas');
+		const measureCtx = measureCanvas.getContext('2d');
+		measureCtx.font = `bold ${fontSize}px monospace`;
+		let maxWidth = 0;
+		for(const line of lines){
+			const w = measureCtx.measureText(line).width;
+			if(w > maxWidth) maxWidth = w;
+		}
+
+		const canvas = document.createElement('canvas');
+		canvas.width = Math.ceil(maxWidth + paddingX * 2);
+		canvas.height = lineH * lines.length + paddingY * 2;
+		const ctx = canvas.getContext('2d');
+
+		ctx.fillStyle = 'rgba(13,27,46,0.92)';
+		ctx.fillRect(0, 0, canvas.width, canvas.height);
+		ctx.strokeStyle = '#4fc3f7';
+		ctx.lineWidth = 3;
+		ctx.strokeRect(1, 1, canvas.width - 2, canvas.height - 2);
+
+		ctx.textAlign = 'left';
+		lines.forEach((line, i) => {
+			ctx.fillStyle = i === 0 ? '#4fc3f7' : '#ffffff';
+			ctx.font = (i === 0 ? `bold ${fontSize}px monospace` : `${fontSize}px monospace`);
+			ctx.fillText(line, paddingX, paddingY + fontSize + i * lineH);
+		});
+
+		const texture = new THREE.CanvasTexture(canvas);
+		texture.minFilter = THREE.LinearFilter;
+		texture.magFilter = THREE.LinearFilter;
+		const mat = new THREE.SpriteMaterial({ map: texture, depthTest: false, depthWrite: false });
+		const sprite = new THREE.Sprite(mat);
+		// Base pequeño multiplicado por la escala del usuario VR para que la etiqueta
+		// se vea con un tamaño similar en paseo (scale~10) y aéreo (scale ~100-300).
+		const k = 0.005 * (Math.max(1, worldScale || 1));
+		sprite.scale.set(canvas.width * k, canvas.height * k, 1);
+		return sprite;
+	}
+
+	_placeInfoPoint(controller){
+		const result = this._raycastPointCloudsWithAttrs(controller);
+		if(!result) return;
+
+		const { position, attrs } = result;
+		this._clearInfoPoint();
+
+		const m = this._buildInfoMeasure(0x00e5ff);
+		this.viewer.scene.addMeasurement(m);
+		m.addMarker(position);
+
+		const worldScale = (this.node && this.node.scale) ? this.node.scale.x : 1;
+		const label = this._createInfoLabel(position, attrs, worldScale);
+		label.position.copy(position);
+		// Justo encima de la esfera: medio alto del rótulo + un pequeño margen.
+		label.position.z += label.scale.y * 0.55;
+		m.add(label);
+
+		this.infoPointMeasure = m;
+		this.infoPointMode = false;
+		this._clearInfoPreview();
+	}
+
+	_deleteAllMeasurements(){
+		// Salir de modos activos para evitar reentrancia
+		if(this.pointsMode){
+			this.pointsMode = false;
+			this.activeMeasurement = null;
+		}
+		if(this.infoPointMode){
+			this.infoPointMode = false;
+		}
+		// Limpiar referencias propias antes de borrar (removeMeasurement dispara eventos)
+		this.infoPointMeasure = null;
+		this.infoPreviewMeasure = null;
+
+		// Copia del array porque removeMeasurement lo muta
+		const all = this.viewer.scene.measurements.slice();
+		for(const m of all){
+			this.viewer.scene.removeMeasurement(m);
+		}
 	}
 
 	// ===== Recortado de zonas (clipping con cubo) =====
@@ -1989,6 +2239,21 @@ export class VRControls extends EventDispatcher{
 				console.log('[VRPTS] preview ok');
 			} catch(e) {
 				console.log('[VRPTS] ERROR preview: ' + e.message + '\n' + (e.stack || ''));
+			}
+		}
+
+		// Preview del modo Punto de Info
+		if(this.infoPointMode && !(this.activeMenu && this.activeMenu.visible)){
+			const pos = this._raycastPointClouds(pointer);
+			if(pos){
+				if(!this.infoPreviewMeasure){
+					const m = this._buildInfoMeasure(0xffeb3b);
+					this.viewer.scene.addMeasurement(m);
+					m.addMarker(pos);
+					this.infoPreviewMeasure = m;
+				} else {
+					this.infoPreviewMeasure.setPosition(0, pos);
+				}
 			}
 		}
 
