@@ -88181,9 +88181,19 @@ ENDSEC
 			group.add(sliderNodeSize.group);
 			interactives.push(...sliderNodeSize.interactives);
 
+			// Checkbox: Box (muestra las bounding boxes del octree)
+			const toggleBox = this._createToggleWidget({
+				label: 'Box',
+				getValue: () => this.viewer.getShowBoundingBox(),
+				setValue: (v) => this.viewer.setShowBoundingBox(v),
+			});
+			toggleBox.group.position.set(0, -0.48, 0.002);
+			group.add(toggleBox.group);
+			interactives.push(...toggleBox.interactives);
+
 			// Botón Volver
 			const btnBack = this._createMenuButton('← Volver', 'BACK_TO_MAIN');
-			btnBack.position.set(0, -0.55, 0.002);
+			btnBack.position.set(0, -0.62, 0.002);
 			group.add(btnBack);
 			interactives.push(btnBack);
 
@@ -88201,6 +88211,9 @@ ENDSEC
 			});
 			this.viewer.addEventListener('minnodesize_changed', () => {
 				sliderNodeSize.group.userData.refreshUI(this.viewer.getMinNodeSize());
+			});
+			this.viewer.addEventListener('show_boundingbox_changed', () => {
+				toggleBox.interactives[0].userData.refreshUI(this.viewer.getShowBoundingBox());
 			});
 
 			this.viewer.sceneVR.add(group);
@@ -91541,6 +91554,13 @@ ENDSEC
 					}
 
 					bbRoot.children = visibleBoxes;
+					// Asignar parent manualmente: bbRoot.children = [...] no lo hace y
+					// las cajas (matrixAutoUpdate=false, parent=null) renderizan con
+					// matrixWorld = box.matrix, ignorando el view aplicado a scene.scene
+					// en renderVR — invisibles/desplazadas en VR.
+					for(let box of visibleBoxes){
+						box.parent = bbRoot;
+					}
 				}
 			}
 

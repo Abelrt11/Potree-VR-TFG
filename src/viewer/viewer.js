@@ -1670,6 +1670,13 @@ export class Viewer extends EventDispatcher{
 				}
 
 				bbRoot.children = visibleBoxes;
+				// Asignar parent manualmente: bbRoot.children = [...] no lo hace y
+				// las cajas (matrixAutoUpdate=false, parent=null) renderizan con
+				// matrixWorld = box.matrix, ignorando el view aplicado a scene.scene
+				// en renderVR — invisibles/desplazadas en VR.
+				for(let box of visibleBoxes){
+					box.parent = bbRoot;
+				}
 			}
 		}
 
