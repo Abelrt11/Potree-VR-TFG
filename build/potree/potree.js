@@ -87639,8 +87639,10 @@ ENDSEC
 			this.clipMenu = null;
 			this.clipTaskMenu = null;
 			this._clipHandleGroup = null; // THREE.Group dentro de viewer.volumeTool.scene
-			this._clipDragging = null;    // { entry, axisIndex } durante el arrastre
+			this._clipDragging = null;    // { entry, kind:'axis'|'center', ... } durante el arrastre
 			this._clipHovered = null;     // tirador resaltado
+			this.clipShape = 'box';       // 'box' | 'cylinder' | 'sphere' — forma a colocar
+			this.clipShapeMenu = null;    // submenú "FORMA DE ZONA" abierto desde Delimitar Zonas
 
 			// Edición de classification por punto
 			this.editClassMode = false;
@@ -87650,12 +87652,15 @@ ENDSEC
 			this.editClassLog = [];             // [{x,y,z,fromCode,toCode,fromName,toName,ts}]
 			this.editClassOverrides = new Map();// key: "x|y|z" en coords del pointcloud → newCode
 			this._editClassProcessedNodes = new WeakSet();
+			// Contexto: rejilla "Editar Clasificación" abierta desde el clip → aplicar al segmento (cajas)
+			this.editClassSegmentMode = false;
 
 			document.addEventListener('vr-mode-select', (e) => {
 				if(e.detail.mode !== 3 && this.pointsMode) this._finishMeasurement();
 				this.pointsMode = (e.detail.mode === 3);
 				if(this.infoPointMode){ this.infoPointMode = false; this._clearInfoPreview(); }
 				if(this.editClassMode){ this.editClassMode = false; this._clearEditClassPreview(); }
+				if(this.editClassSegmentMode){ this.editClassSegmentMode = false; }
 			});
 		}
 
@@ -87716,6 +87721,7 @@ ENDSEC
 			this._createCloudMenu();
 			this._createClipMenu();
 			this._createClipTaskMenu();
+			this._createClipShapeMenu();
 			this._createEditClassMenu();
 		}
 
@@ -87950,6 +87956,7 @@ ENDSEC
 			if(this.cloudMenu) this.cloudMenu.visible = false;
 			if(this.clipMenu) this.clipMenu.visible = false;
 			if(this.clipTaskMenu) this.clipTaskMenu.visible = false;
+			if(this.clipShapeMenu) this.clipShapeMenu.visible = false;
 			if(this.editClassMenu) this.editClassMenu.visible = false;
 			this.activeMenu = null;
 			this._setLaserLength(false);
@@ -88272,31 +88279,35 @@ ENDSEC
 			const bgMat = new MeshBasicMaterial({
 				color: 0x0d1b2e, transparent: true, opacity: 0.88, side: DoubleSide,
 			});
-			const bg = new Mesh(new PlaneGeometry(0.70, 0.84), bgMat);
+			const bg = new Mesh(new PlaneGeometry(0.70, 0.90), bgMat);
 			group.add(bg);
 
 			const title = new Potree.TextSprite('RECORTADO DE ZONAS');
 			title.scale.set(0.055, 0.055, 0.055);
-			title.position.set(0, 0.26, 0.002);
+			title.position.set(0, 0.35, 0.002);
 			group.add(title);
 
 			const btnDelimit = this._createMenuButton('Delimitar Zonas', 'CLIP_DELIMIT');
-			btnDelimit.position.set(0, 0.12, 0.002);
+			btnDelimit.position.set(0, 0.20, 0.002);
 			group.add(btnDelimit);
 
 			const btnModify = this._createMenuButton('Modificar Zonas', 'OPEN_CLIP_TASK');
-			btnModify.position.set(0, -0.03, 0.002);
+			btnModify.position.set(0, 0.05, 0.002);
 			group.add(btnModify);
 
+			const btnReclassify = this._createMenuButton('Reclasif.\nZona', 'OPEN_CLASS_FOR_CLIP');
+			btnReclassify.position.set(0, -0.10, 0.002);
+			group.add(btnReclassify);
+
 			const btnDelete = this._createMenuButton('Eliminar Zonas', 'CLIP_DELETE');
-			btnDelete.position.set(0, -0.18, 0.002);
+			btnDelete.position.set(0, -0.25, 0.002);
 			group.add(btnDelete);
 
 			const btnBack = this._createMenuButton('← Volver', 'BACK_TO_MAIN');
-			btnBack.position.set(0, -0.33, 0.002);
+			btnBack.position.set(0, -0.39, 0.002);
 			group.add(btnBack);
 
-			group.userData.interactives = [btnDelimit, btnModify, btnDelete, btnBack];
+			group.userData.interactives = [btnDelimit, btnModify, btnReclassify, btnDelete, btnBack];
 			this.viewer.sceneVR.add(group);
 			this.clipMenu = group;
 		}
@@ -88338,6 +88349,43 @@ ENDSEC
 			group.userData.interactives = [...radio.interactives, btnBack];
 			this.viewer.sceneVR.add(group);
 			this.clipTaskMenu = group;
+		}
+
+		_createClipShapeMenu(){
+			const group = new Group();
+			group.name = 'vr-clip-shape-menu';
+			group.visible = false;
+
+			const bgMat = new MeshBasicMaterial({
+				color: 0x0d1b2e, transparent: true, opacity: 0.88, side: DoubleSide,
+			});
+			const bg = new Mesh(new PlaneGeometry(0.70, 0.66), bgMat);
+			group.add(bg);
+
+			const title = new Potree.TextSprite('FORMA DE ZONA');
+			title.scale.set(0.07, 0.07, 0.07);
+			title.position.set(0, 0.24, 0.002);
+			group.add(title);
+
+			const btnBox = this._createMenuButton('Cubo', 'CLIP_SHAPE_BOX');
+			btnBox.position.set(0, 0.10, 0.002);
+			group.add(btnBox);
+
+			const btnCyl = this._createMenuButton('Cilindro', 'CLIP_SHAPE_CYLINDER');
+			btnCyl.position.set(0, -0.05, 0.002);
+			group.add(btnCyl);
+
+			const btnSphere = this._createMenuButton('Esfera', 'CLIP_SHAPE_SPHERE');
+			btnSphere.position.set(0, -0.20, 0.002);
+			group.add(btnSphere);
+
+			const btnBack = this._createMenuButton('← Volver', 'BACK_TO_CLIP_MENU');
+			btnBack.position.set(0, -0.34, 0.002);
+			group.add(btnBack);
+
+			group.userData.interactives = [btnBox, btnCyl, btnSphere, btnBack];
+			this.viewer.sceneVR.add(group);
+			this.clipShapeMenu = group;
 		}
 
 		_createAttributeMenu(){
@@ -88696,7 +88744,13 @@ ENDSEC
 						return;
 					}
 					if(ud.modeId === 'BACK_TO_MAIN'){
-						this._showMenu(this.mainMenu);
+						// Si la rejilla "Editar Clasif." se abrió desde el clip, volver al clip y limpiar el contexto
+						if(this.editClassSegmentMode){
+							this.editClassSegmentMode = false;
+							this._showMenu(this.clipMenu);
+						}else {
+							this._showMenu(this.mainMenu);
+						}
 						return;
 					}
 					if(ud.modeId === 'OPEN_CLOUD_MENU'){
@@ -88730,7 +88784,26 @@ ENDSEC
 						return;
 					}
 					if(ud.modeId === 'CLIP_DELIMIT'){
+						this._showMenu(this.clipShapeMenu);
+						return;
+					}
+					if(ud.modeId === 'CLIP_SHAPE_BOX'){
+						this.clipShape = 'box';
 						this._startClipMode();
+						return;
+					}
+					if(ud.modeId === 'CLIP_SHAPE_CYLINDER'){
+						this.clipShape = 'cylinder';
+						this._startClipMode();
+						return;
+					}
+					if(ud.modeId === 'CLIP_SHAPE_SPHERE'){
+						this.clipShape = 'sphere';
+						this._startClipMode();
+						return;
+					}
+					if(ud.modeId === 'BACK_TO_CLIP_MENU'){
+						this._showMenu(this.clipMenu);
 						return;
 					}
 					if(ud.modeId === 'CLIP_DELETE'){
@@ -88759,8 +88832,21 @@ ENDSEC
 						this._showMenu(this.editClassMenu);
 						return;
 					}
+					if(ud.modeId === 'OPEN_CLASS_FOR_CLIP'){
+						if(this.clipBoxes.length === 0){
+							console.log('[EditClass] no hay cajas de recorte: coloca una zona primero (Delimitar Zonas).');
+							return;
+						}
+						this.editClassSegmentMode = true;
+						this._showMenu(this.editClassMenu);
+						return;
+					}
 					if(ud.modeId === 'EDIT_CLASS_SET_TARGET'){
-						this._setEditClassTarget(ud.classCode, ud.className);
+						if(this.editClassSegmentMode){
+							this._applyEditClassToClipBoxes(ud.classCode, ud.className);
+						}else {
+							this._setEditClassTarget(ud.classCode, ud.className);
+						}
 						return;
 					}
 					if(ud.modeId === 'EDIT_CLASS_EXPORT_LOG'){
@@ -88817,7 +88903,7 @@ ENDSEC
 
 			if(this.clipMode){
 				if(this._clipHovered){
-					this._beginAxisDrag(this._clipHovered);
+					this._beginAxisDrag(this._clipHovered, controller);
 				}else {
 					this._placeClipBox(controller);
 				}
@@ -89339,43 +89425,123 @@ ENDSEC
 
 			const { position, node, pIndex, pointcloud } = result;
 			if(!node || !node.sceneNode) return;
-			const geom = node.sceneNode.geometry;
-			const classAttr = geom && geom.attributes && geom.attributes.classification;
+			const classAttr = node.sceneNode.geometry && node.sceneNode.geometry.attributes.classification;
 			if(!classAttr){
 				console.log('[EditClass] el nodo no tiene atributo classification');
 				return;
 			}
 
-			const oldCode = classAttr.array[pIndex];
-			const newCode = this.editClassTarget.code;
-			if(oldCode === newCode) return;
-
 			const pc = pointcloud || this.viewer.scene.pointclouds[0];
+			const newCode = this.editClassTarget.code;
+			const newName = this.editClassTarget.name;
 
-			// Escribir en el buffer + marcar para subida a GPU
+			if(this._changePointClassification(node, pIndex, position, pc, newCode, newName)){
+				classAttr.needsUpdate = true;
+
+				// Feedback háptico breve si el dispositivo lo soporta
+				try {
+					const ga = controller && controller.inputSource && controller.inputSource.gamepad;
+					const act = ga && ga.hapticActuators && ga.hapticActuators[0];
+					if(act && act.pulse) act.pulse(0.5, 60);
+				} catch(_) {}
+			}
+		}
+
+		// Aplica el cambio de clase a UN punto ya identificado. Devuelve true si se modificó.
+		// El llamador debe marcar classAttr.needsUpdate (una sola vez por nodo).
+		_changePointClassification(node, pIndex, worldPos, pc, newCode, newName){
+			const classAttr = node.sceneNode && node.sceneNode.geometry && node.sceneNode.geometry.attributes.classification;
+			if(!classAttr) return false;
+			const oldCode = classAttr.array[pIndex];
+			if(oldCode === newCode) return false;
 			classAttr.array[pIndex] = newCode;
-			classAttr.needsUpdate = true;
-
-			// Guardar override (para reaplicar tras recarga de nodos)
-			const key = this._overrideKey(pc, position);
-			this.editClassOverrides.set(key, newCode);
-
-			// Entrada en el log
-			const fromName = this._classNameForCode(oldCode);
-			const toName = this.editClassTarget.name;
+			this.editClassOverrides.set(this._overrideKey(pc, worldPos), newCode);
 			this.editClassLog.push({
-				x: position.x, y: position.y, z: position.z,
+				x: worldPos.x, y: worldPos.y, z: worldPos.z,
 				fromCode: oldCode, toCode: newCode,
-				fromName, toName,
+				fromName: this._classNameForCode(oldCode), toName: newName,
 				ts: new Date().toISOString(),
 			});
+			return true;
+		}
 
-			// Feedback háptico breve si el dispositivo lo soporta
-			try {
-				const ga = controller && controller.inputSource && controller.inputSource.gamepad;
-				const act = ga && ga.hapticActuators && ga.hapticActuators[0];
-				if(act && act.pulse) act.pulse(0.5, 60);
-			} catch(_) {}
+		// Test punto-en-zona shape-aware (mundo).
+		// AABB con escala anisótropa → semi-ejes (sx/2, sy/2, sz/2). Normalizando a esos
+		// semi-ejes obtenemos (dx,dy,dz) y el test depende de la forma.
+		_pointInClipEntry(worldPos, entry){
+			const c = entry.volume.position, s = entry.volume.scale;
+			const dx = (worldPos.x - c.x) / (s.x * 0.5);
+			const dy = (worldPos.y - c.y) / (s.y * 0.5);
+			const dz = (worldPos.z - c.z) / (s.z * 0.5);
+			const shape = entry.shape || 'box';
+			if(shape === 'sphere')   return dx*dx + dy*dy + dz*dz <= 1;          // elipsoide
+			if(shape === 'cylinder') return Math.abs(dz) <= 1 && (dx*dx + dy*dy) <= 1; // sección elíptica XY, altura Z
+			return Math.abs(dx) <= 1 && Math.abs(dy) <= 1 && Math.abs(dz) <= 1;  // box
+		}
+
+		// Aplica una clase a TODOS los puntos dentro de las zonas de recorte activas
+		// (unión por forma exacta). Itera nodos cargados/visibles, escribe en el buffer de
+		// classification y registra cada cambio en editClassLog (lo verás luego en el TXT).
+		_applyEditClassToClipBoxes(newCode, newName){
+			if(!this.clipBoxes.length){
+				this.editClassSegmentMode = false;
+				this._showMenu(this.clipMenu);
+				return;
+			}
+
+			// AABBs en mundo (Box3) para todas las cajas (axis-aligned, sin rotación)
+			const aabbs = this.clipBoxes.map(({volume}) => {
+				const h = volume.scale.clone().multiplyScalar(0.5);
+				return new Box3(
+					volume.position.clone().sub(h),
+					volume.position.clone().add(h)
+				);
+			});
+
+			// Unión de las AABBs para descartar nodos cuya bbox no toque ninguna caja
+			const unionAabb = aabbs[0].clone();
+			for(let i = 1; i < aabbs.length; i++) unionAabb.union(aabbs[i]);
+
+			const tmp = new Vector3();
+			const nodeBox = new Box3();
+			let changed = 0;
+
+			for(const pc of this.viewer.scene.pointclouds){
+				for(const node of pc.visibleNodes){
+					const sn = node.sceneNode;
+					if(!sn || !sn.geometry) continue;
+					const posAttr = sn.geometry.attributes.position;
+					const classAttr = sn.geometry.attributes.classification;
+					if(!posAttr || !classAttr) continue;
+
+					// Pre-filtrado: saltar nodos cuya bbox (en mundo) no interseca la unión de cajas
+					if(sn.geometry.boundingBox){
+						nodeBox.copy(sn.geometry.boundingBox).applyMatrix4(sn.matrixWorld);
+						if(!nodeBox.intersectsBox(unionAabb)) continue;
+					}
+
+					const mat = sn.matrixWorld;
+					let nodeChanged = false;
+					for(let i = 0; i < posAttr.count; i++){
+						tmp.fromBufferAttribute(posAttr, i).applyMatrix4(mat);
+						// Test por forma (esfera/cilindro/cubo) — aabbs solo se usa para el pre-filtrado de nodo
+						let inside = false;
+						for(const entry of this.clipBoxes){
+							if(this._pointInClipEntry(tmp, entry)){ inside = true; break; }
+						}
+						if(!inside) continue;
+						if(this._changePointClassification(node, i, tmp.clone(), pc, newCode, newName)){
+							changed++;
+							nodeChanged = true;
+						}
+					}
+					if(nodeChanged) classAttr.needsUpdate = true; // un marcado por nodo
+				}
+			}
+
+			console.log(`[EditClass] segmento: ${changed} puntos reclasificados a '${newName}'`);
+			this.editClassSegmentMode = false;
+			this._showMenu(this.clipMenu);
 		}
 
 		_exportEditClassLog(){
@@ -89498,16 +89664,39 @@ ENDSEC
 				pos.addScaledVector(ray.direction, -edge * 0.3);
 			}
 
+			const shape = this.clipShape || 'box';
 			const v = new Potree.BoxVolume();
 			v.clip = true;
-			v.name = 'VR Clip ' + (this.clipBoxes.length + 1);
+			v.name = 'VR Clip ' + (this.clipBoxes.length + 1) + ' (' + shape + ')';
 			v.position.copy(pos);
 			v.scale.set(edge, edge, edge);
-			if(v.frame && v.frame.material) v.frame.material.color.setHex(0xffff00);
+
+			// Para forma 'box' usamos el frame que ya trae BoxVolume.
+			// Para 'sphere'/'cylinder' ocultamos ese frame y añadimos un wireframe propio
+			// (LineSegments unit-bound ±0.5) como hijo, así hereda position/scale del BoxVolume.
+			let visualMesh = null;
+			if(shape === 'box'){
+				if(v.frame && v.frame.material) v.frame.material.color.setHex(0xffff00);
+			}else {
+				if(v.frame) v.frame.visible = false;
+				const lineMat = new LineBasicMaterial({ color: 0xffff00, depthWrite: false });
+				let wireGeom;
+				if(shape === 'sphere'){
+					wireGeom = new WireframeGeometry(new SphereGeometry(0.5, 16, 16));
+				}else { // cylinder
+					wireGeom = new WireframeGeometry(new CylinderGeometry(0.5, 0.5, 1, 24, 1, true));
+				}
+				visualMesh = new LineSegments(wireGeom, lineMat);
+				if(shape === 'cylinder'){
+					// Eje del cilindro alineado a Z (eje arriba en Potree)
+					visualMesh.rotation.x = Math.PI / 2;
+				}
+				v.add(visualMesh);
+			}
 
 			this.viewer.scene.addVolume(v);
 
-			const entry = { volume: v, handles: [] };
+			const entry = { shape, volume: v, visualMesh, handles: [] };
 			this._createAxisHandles(entry);
 			this.clipBoxes.push(entry);
 			this._updateClipHandles();
@@ -89522,11 +89711,18 @@ ENDSEC
 					const mat = new MeshBasicMaterial({ color: colors[axis], depthTest: false, depthWrite: false });
 					const mesh = new Mesh(geo, mat);
 					mesh.renderOrder = 10;
-					mesh.userData = { kind: 'cliphandle', entry, axisIndex: axis, sign, baseColor: colors[axis] };
+					mesh.userData = { kind: 'cliphandle', role: 'axis', entry, axisIndex: axis, sign, baseColor: colors[axis] };
 					if(this._clipHandleGroup) this._clipHandleGroup.add(mesh);
 					entry.handles.push(mesh);
 				}
 			}
+			// Tirador central (blanco) para MOVER el volumen entero
+			const centerMat = new MeshBasicMaterial({ color: 0xffffff, depthTest: false, depthWrite: false });
+			const centerMesh = new Mesh(geo, centerMat);
+			centerMesh.renderOrder = 10;
+			centerMesh.userData = { kind: 'cliphandle', role: 'center', entry, baseColor: 0xffffff };
+			if(this._clipHandleGroup) this._clipHandleGroup.add(centerMesh);
+			entry.handles.push(centerMesh);
 		}
 
 		_updateClipHandles(){
@@ -89541,9 +89737,13 @@ ENDSEC
 				const sc = v.scale;
 				const r = Math.max(Math.max(sc.x, sc.y, sc.z) * 0.06, 1e-3);
 				for(const h of entry.handles){
-					const ai = h.userData.axisIndex;
-					const half = (ai === 0 ? sc.x : ai === 1 ? sc.y : sc.z) / 2;
-					h.position.copy(v.position).addScaledVector(axisVec[ai], h.userData.sign * half);
+					if(h.userData.role === 'center'){
+						h.position.copy(v.position);
+					}else {
+						const ai = h.userData.axisIndex;
+						const half = (ai === 0 ? sc.x : ai === 1 ? sc.y : sc.z) / 2;
+						h.position.copy(v.position).addScaledVector(axisVec[ai], h.userData.sign * half);
+					}
 					h.scale.set(r, r, r);
 				}
 			}
@@ -89578,9 +89778,22 @@ ENDSEC
 			}
 		}
 
-		_beginAxisDrag(handle){
+		_beginAxisDrag(handle, controller){
 			if(!handle || !handle.userData) return;
-			this._clipDragging = { entry: handle.userData.entry, axisIndex: handle.userData.axisIndex };
+			const entry = handle.userData.entry;
+			if(handle.userData.role === 'center'){
+				// Drag de mover: captura origen del rayo del mando + posición inicial del volumen
+				const ctrl = controller || this._getRightController() || this.cPrimary;
+				const ray = this._clipPointerRay(ctrl);
+				const initialRayOrigin = ray ? ray.origin.clone() : new Vector3();
+				this._clipDragging = {
+					entry, kind: 'center',
+					initialRayOrigin,
+					initialVolPos: entry.volume.position.clone(),
+				};
+			}else {
+				this._clipDragging = { entry, kind: 'axis', axisIndex: handle.userData.axisIndex };
+			}
 		}
 
 		// Elimina todos los cubos delimitadores creados. Reutiliza viewer.scene.removeVolume
@@ -89602,8 +89815,18 @@ ENDSEC
 		_updateAxisDrag(pointer){
 			const ray = this._clipPointerRay(pointer);
 			if(!ray) return;
-			const v = this._clipDragging.entry.volume;
-			const ai = this._clipDragging.axisIndex;
+			const drag = this._clipDragging;
+			const v = drag.entry.volume;
+
+			if(drag.kind === 'center'){
+				// Mover: la posición del volumen sigue el rayo del mando con el offset capturado
+				// al iniciar el arrastre (patrón "grab + relative motion").
+				v.position.copy(drag.initialVolPos).add(ray.origin).sub(drag.initialRayOrigin);
+				return;
+			}
+
+			// kind === 'axis' (lógica existente): redimensionar simétrico respecto al centro
+			const ai = drag.axisIndex;
 			const C = v.position;
 			const A = (ai === 0) ? new Vector3(1, 0, 0)
 				: (ai === 1) ? new Vector3(0, 1, 0)
@@ -89612,11 +89835,11 @@ ENDSEC
 			// Punto más cercano entre el rayo (O,dir) y la recta del eje (C,A); dir y A son unitarios
 			const w0 = ray.origin.clone().sub(C);
 			const b = ray.direction.dot(A);
-			const d = ray.direction.dot(w0);
+			const dd = ray.direction.dot(w0);
 			const e = A.dot(w0);
 			const denom = 1 - b * b;
 			if(Math.abs(denom) < 1e-6) return; // rayo casi paralelo al eje
-			const tc = (e - b * d) / denom;    // distancia con signo a lo largo de A desde el centro
+			const tc = (e - b * dd) / denom;   // distancia con signo a lo largo de A desde el centro
 			const newSize = Math.max(2 * Math.abs(tc), 1e-3);
 			if(ai === 0) v.scale.x = newSize;
 			else if(ai === 1) v.scale.y = newSize;
