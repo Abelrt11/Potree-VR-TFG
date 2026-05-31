@@ -87633,6 +87633,10 @@ ENDSEC
 			this.infoPointMeasure = null;    // Potree.Measure (esfera + label) una vez colocado
 			this.infoPreviewMeasure = null;  // Potree.Measure de la esfera fantasma mientras se apunta
 
+			// Tamaño de punto reducido durante la colocación (medidas, info, clasificación)
+			this._placementShrinkActive = false;
+			this._savedPointSizes = null;
+
 			// Recortado de zonas (clipping con cubo)
 			this.clipMode = false;
 			this.clipBoxes = [];          // [{ volume, handles: [6 meshes] }]
@@ -89164,6 +89168,26 @@ ENDSEC
 			this.pointsMode = false;
 		}
 
+		_shrinkPointSizeForPlacement(){
+			this._savedPointSizes = [];
+			for(const pc of this.viewer.scene.pointclouds){
+				if(!pc || !pc.material) continue;
+				this._savedPointSizes.push({ material: pc.material, size: pc.material.size });
+				pc.material.size = 0; // el shader lo limita a minSize (~2 px)
+			}
+			this._placementShrinkActive = true;
+		}
+
+		_restorePointSize(){
+			if(this._savedPointSizes){
+				for(const e of this._savedPointSizes){
+					if(e.material) e.material.size = e.size;
+				}
+			}
+			this._savedPointSizes = null;
+			this._placementShrinkActive = false;
+		}
+
 		// ===== Punto de información =====
 
 		_raycastPointCloudsWithAttrs(controller){
@@ -89895,6 +89919,15 @@ ENDSEC
 			}
 
 			this.mode.update(this, delta);
+
+			// Reducir el tamaño de punto al mínimo mientras se colocan medidas, puntos de
+			// información o se edita clasificación, para apuntar con más precisión.
+			const placing = this.pointsMode || this.infoPointMode || this.editClassMode;
+			if(placing && !this._placementShrinkActive){
+				this._shrinkPointSizeForPlacement();
+			}else if(!placing && this._placementShrinkActive){
+				this._restorePointSize();
+			}
 
 			// Preview del modo Puntos
 			if(this.pointsMode && !(this.activeMenu && this.activeMenu.visible)){
