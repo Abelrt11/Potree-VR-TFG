@@ -87628,6 +87628,9 @@ ENDSEC
 			this.activeMeasurement = null;
 			this.measureType = 'distance';
 
+			// Visión de anomalías (cilindros rojos sobre las zonas de peligro)
+			this.anomaliesActive = false;
+
 			// Punto de información
 			this.infoPointMode = false;
 			this.infoPointMeasure = null;    // Potree.Measure (esfera + label) una vez colocado
@@ -87741,7 +87744,7 @@ ENDSEC
 				opacity: 0.88,
 				side: DoubleSide,
 			});
-			const bg = new Mesh(new PlaneGeometry(0.64, 0.90), bgMat);
+			const bg = new Mesh(new PlaneGeometry(0.64, 1.10), bgMat);
 			group.add(bg);
 
 			// Título
@@ -87783,7 +87786,11 @@ ENDSEC
 			btnEditClass.position.set(0.17, -0.32, 0.002);
 			group.add(btnEditClass);
 
-			group.userData.interactives = [btnWalk, btnGod, btnPoints, btnAppearance, btnAttribute, btnClip, btnChangeCloud, btnEditClass];
+			const btnAnomalies = this._createMenuButton('Ver\nAnomalías', 'TOGGLE_ANOMALIES');
+			btnAnomalies.position.set(0, -0.46, 0.002);
+			group.add(btnAnomalies);
+
+			group.userData.interactives = [btnWalk, btnGod, btnPoints, btnAppearance, btnAttribute, btnClip, btnChangeCloud, btnEditClass, btnAnomalies];
 			this.viewer.sceneVR.add(group);
 			this.mainMenu = group;
 			window.vrMenu = group;
@@ -88448,8 +88455,8 @@ ENDSEC
 			const bgMat = new MeshBasicMaterial({
 				color: 0x0d1b2e, transparent: true, opacity: 0.88, side: DoubleSide,
 			});
-			const bg = new Mesh(new PlaneGeometry(0.64, 1.00), bgMat);
-			bg.position.set(0, -0.10, 0);
+			const bg = new Mesh(new PlaneGeometry(0.64, 1.16), bgMat);
+			bg.position.set(0, -0.13, 0);
 			group.add(bg);
 
 			const title = new Potree.TextSprite('NUBE DE PUNTOS');
@@ -88458,19 +88465,20 @@ ENDSEC
 			group.add(title);
 
 			const clouds = [
-				{ label: 'Ejemplo 1', cloud: 1 },
-				{ label: 'Ejemplo 2', cloud: 2 },
-				{ label: 'Ejemplo 3', cloud: 3 },
-				{ label: 'Ejemplo 5', cloud: 5 },
-				{ label: 'Corredor', cloud: 'corredor' },
-				{ label: 'Gran Corredor', cloud: 'gran_corredor' },
-				{ label: 'Gran Corredor 2', cloud: 'gran_corredor_2' },
+				{ label: 'Tramo A\n563.4 MB', cloud: 1 },
+				{ label: 'Tramo B\n467.58 MB', cloud: 2 },
+				{ label: 'Tramo C\n498.86 MB', cloud: 3 },
+				{ label: 'Tramo D\n672.63 MB', cloud: 5 },
+				{ label: 'Corredor\n(A+B+C)', cloud: 'corredor' },
+				{ label: 'Gran Corredor\n5.0 GB', cloud: 'gran_corredor' },
+				{ label: 'Paseo Garañón\n1011 MB', cloud: 'gran_corredor_2' },
+				{ label: 'Red Eléctrica\ncon Anomalías\n319 MB', cloud: 'anomalias' },
 			];
 			const positions = [
 				{ x: -0.17, y: 0.16 }, { x: 0.17, y: 0.16 },
 				{ x: -0.17, y: 0.02 }, { x: 0.17, y: 0.02 },
 				{ x: -0.17, y: -0.12 }, { x: 0.17, y: -0.12 },
-				{ x: 0, y: -0.30 },
+				{ x: -0.17, y: -0.26 }, { x: 0.17, y: -0.26 },
 			];
 
 			const btns = clouds.map(({ label, cloud }, i) => {
@@ -88482,7 +88490,7 @@ ENDSEC
 			});
 
 			const btnBack = this._createMenuButton('← Volver', 'BACK_TO_MAIN');
-			btnBack.position.set(0, -0.46, 0.002);
+			btnBack.position.set(0, -0.52, 0.002);
 			group.add(btnBack);
 
 			group.userData.interactives = [...btns, btnBack];
@@ -88762,7 +88770,13 @@ ENDSEC
 						return;
 					}
 					if(ud.modeId === 'SELECT_CLOUD'){
+						this.anomaliesActive = false;
 						document.dispatchEvent(new CustomEvent('vr-cloud-select', { detail: { cloud: ud.cloudId } }));
+						this._hideAllMenus();
+						return;
+					}
+					if(ud.modeId === 'TOGGLE_ANOMALIES'){
+						this._toggleAnomalies();
 						this._hideAllMenus();
 						return;
 					}
@@ -88956,7 +88970,18 @@ ENDSEC
 			}
 		}
 
+		_toggleAnomalies(){
+			this.anomaliesActive = !this.anomaliesActive;
+			document.dispatchEvent(new CustomEvent('vr-anomalies-toggle', { detail: { active: this.anomaliesActive } }));
+		}
+
 		onSqueezeStart(controller){
+			if(this.anomaliesActive){
+				this.anomaliesActive = false;
+				document.dispatchEvent(new CustomEvent('vr-anomalies-toggle', { detail: { active: false } }));
+				return;
+			}
+
 			if(this.clipMode){
 				this._finishClipMode();
 				return;
