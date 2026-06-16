@@ -1258,6 +1258,12 @@ export class Renderer {
 
 				const lClipBoxes = shader.uniformLocations["clipBoxes[0]"];
 				gl.uniformMatrix4fv(lClipBoxes, false, material.uniforms.clipBoxes.value);
+
+				// Forma por volumen, mismo orden que clipBoxes[]
+				const lClipBoxShapes = shader.uniformLocations["clipBoxShapes[0]"];
+				if(lClipBoxShapes){
+					gl.uniform1iv(lClipBoxShapes, material.uniforms.clipBoxShapes.value);
+				}
 			}
 
 			// TODO CLIPSPHERES

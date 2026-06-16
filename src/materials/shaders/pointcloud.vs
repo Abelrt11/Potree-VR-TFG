@@ -48,6 +48,7 @@ uniform int clipTask;
 uniform int clipMethod;
 #if defined(num_clipboxes) && num_clipboxes > 0
 	uniform mat4 clipBoxes[num_clipboxes];
+	uniform int clipBoxShapes[num_clipboxes]; // forma por volumen: 0=cubo, 1=esfera, 2=cilindro
 #endif
 
 #if defined(num_clipspheres) && num_clipspheres > 0
@@ -806,14 +807,22 @@ void doClipping(){
 
 	#if defined(num_clipboxes) && num_clipboxes > 0
 		for(int i = 0; i < num_clipboxes; i++){
-			vec4 clipPosition = clipBoxes[i] * modelMatrix * vec4( position, 1.0 );
-			bool inside = -0.5 <= clipPosition.x && clipPosition.x <= 0.5;
-			inside = inside && -0.5 <= clipPosition.y && clipPosition.y <= 0.5;
-			inside = inside && -0.5 <= clipPosition.z && clipPosition.z <= 0.5;
-
+			vec4 p = clipBoxes[i] * modelMatrix * vec4(position, 1.0);
+			int shp = clipBoxShapes[i];
+			bool inside;
+			if(shp == 1){
+				// esfera: radio 0.5 en espacio local unit-bound [-0.5,0.5]^3
+				inside = length(p.xyz) <= 0.5;
+			} else if(shp == 2){
+				// cilindro: eje Z, radio 0.5, semialtura 0.5
+				inside = abs(p.z) <= 0.5 && (p.x * p.x + p.y * p.y) <= 0.25;
+			} else {
+				// cubo (por defecto)
+				inside = -0.5 <= p.x && p.x <= 0.5 && -0.5 <= p.y && p.y <= 0.5 && -0.5 <= p.z && p.z <= 0.5;
+			}
 			insideCount = insideCount + (inside ? 1 : 0);
 			clipVolumesCount++;
-		}	
+		}
 	#endif
 
 	#if defined(num_clippolygons) && num_clippolygons > 0

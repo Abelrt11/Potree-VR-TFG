@@ -1833,31 +1833,29 @@ export class Viewer extends EventDispatcher{
 		}
 
 		{ // update clip boxes
-			let boxes = [];
-			
-			// volumes with clipping enabled
-			//boxes.push(...this.scene.volumes.filter(v => (v.clip)));
-			boxes.push(...this.scene.volumes.filter(v => (v.clip && v instanceof BoxVolume)));
+			const shapeTypeOf = { 'sphere': 1, 'cylinder': 2 };
 
-			// profile segments
-			for(let profile of this.scene.profiles){
-				boxes.push(...profile.boxes);
-			}
-			
-			// Needed for .getInverse(), pre-empt a determinant of 0, see #815 / #816
+			let rawVols = [...this.scene.volumes.filter(v => v.clip && v instanceof BoxVolume)];
+			for(let profile of this.scene.profiles){ rawVols.push(...profile.boxes); }
+
 			let degenerate = (box) => box.matrixWorld.determinant() !== 0;
-			
-			let clipBoxes = boxes.filter(degenerate).map( box => {
-				box.updateMatrixWorld();
-				
-				let boxInverse = box.matrixWorld.clone().invert();
-				let boxPosition = box.getWorldPosition(new THREE.Vector3());
+			let validVols = rawVols.filter(degenerate);
 
-				return {box: box, inverse: boxInverse, position: boxPosition};
+			// Cada volumen lleva su propia forma (0=cubo, 1=esfera, 2=cilindro), leída de
+			// userData.clipShape. Los profile.boxes no la tienen → 0 (cubo). El índice queda
+			// alineado con clipBoxes[] en el shader.
+			let clipBoxes = validVols.map(v => {
+				v.updateMatrixWorld();
+				return {
+					box: v,
+					inverse: v.matrixWorld.clone().invert(),
+					position: v.getWorldPosition(new THREE.Vector3()),
+					shape: shapeTypeOf[v.userData && v.userData.clipShape] || 0,
+				};
 			});
 
 			let clipPolygons = this.scene.polygonClipVolumes.filter(vol => vol.initialized);
-			
+
 			// set clip volumes in material
 			for(let pointcloud of visiblePointClouds){
 				pointcloud.material.setClipBoxes(clipBoxes);

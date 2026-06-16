@@ -57546,6 +57546,7 @@ uniform int clipTask;
 uniform int clipMethod;
 #if defined(num_clipboxes) && num_clipboxes > 0
 	uniform mat4 clipBoxes[num_clipboxes];
+	uniform int clipBoxShapes[num_clipboxes]; // forma por volumen: 0=cubo, 1=esfera, 2=cilindro
 #endif
 
 #if defined(num_clipspheres) && num_clipspheres > 0
@@ -58304,14 +58305,22 @@ void doClipping(){
 
 	#if defined(num_clipboxes) && num_clipboxes > 0
 		for(int i = 0; i < num_clipboxes; i++){
-			vec4 clipPosition = clipBoxes[i] * modelMatrix * vec4( position, 1.0 );
-			bool inside = -0.5 <= clipPosition.x && clipPosition.x <= 0.5;
-			inside = inside && -0.5 <= clipPosition.y && clipPosition.y <= 0.5;
-			inside = inside && -0.5 <= clipPosition.z && clipPosition.z <= 0.5;
-
+			vec4 p = clipBoxes[i] * modelMatrix * vec4(position, 1.0);
+			int shp = clipBoxShapes[i];
+			bool inside;
+			if(shp == 1){
+				// esfera: radio 0.5 en espacio local unit-bound [-0.5,0.5]^3
+				inside = length(p.xyz) <= 0.5;
+			} else if(shp == 2){
+				// cilindro: eje Z, radio 0.5, semialtura 0.5
+				inside = abs(p.z) <= 0.5 && (p.x * p.x + p.y * p.y) <= 0.25;
+			} else {
+				// cubo (por defecto)
+				inside = -0.5 <= p.x && p.x <= 0.5 && -0.5 <= p.y && p.y <= 0.5 && -0.5 <= p.z && p.z <= 0.5;
+			}
 			insideCount = insideCount + (inside ? 1 : 0);
 			clipVolumesCount++;
-		}	
+		}
 	#endif
 
 	#if defined(num_clippolygons) && num_clippolygons > 0
@@ -59125,10 +59134,9 @@ void main() {
 				elevationRange:		{ type: "2fv", value: [0, 0] },
 
 				clipBoxCount:		{ type: "f", value: 0 },
-				//clipSphereCount:	{ type: "f", value: 0 },
 				clipPolygonCount:	{ type: "i", value: 0 },
 				clipBoxes:			{ type: "Matrix4fv", value: [] },
-				//clipSpheres:		{ type: "Matrix4fv", value: [] },
+				clipBoxShapes:		{ type: "iv", value: [] }, // forma por volumen: 0=cubo, 1=esfera, 2=cilindro
 				clipPolygons:		{ type: "3fv", value: [] },
 				clipPolygonVCount:	{ type: "iv", value: [] },
 				clipPolygonVP:		{ type: "Matrix4fv", value: [] },
@@ -59315,11 +59323,13 @@ void main() {
 			}
 
 			this.uniforms.clipBoxes.value = new Float32Array(this.clipBoxes.length * 16);
+			this.uniforms.clipBoxShapes.value = new Int32Array(this.clipBoxes.length);
 
 			for (let i = 0; i < this.clipBoxes.length; i++) {
 				let box = clipBoxes[i];
 
 				this.uniforms.clipBoxes.value.set(box.inverse.elements, 16 * i);
+				this.uniforms.clipBoxShapes.value[i] = box.shape || 0; // forma por volumen
 			}
 
 			for (let i = 0; i < this.uniforms.clipBoxes.value.length; i++) {
@@ -63592,6 +63602,12 @@ void main() {
 
 					const lClipBoxes = shader.uniformLocations["clipBoxes[0]"];
 					gl.uniformMatrix4fv(lClipBoxes, false, material.uniforms.clipBoxes.value);
+
+					// Forma por volumen, mismo orden que clipBoxes[]
+					const lClipBoxShapes = shader.uniformLocations["clipBoxShapes[0]"];
+					if(lClipBoxShapes){
+						gl.uniform1iv(lClipBoxShapes, material.uniforms.clipBoxShapes.value);
+					}
 				}
 
 				// TODO CLIPSPHERES
@@ -87651,6 +87667,13 @@ ENDSEC
 			this.clipShape = 'box';       // 'box' | 'cylinder' | 'sphere' — forma a colocar
 			this.clipShapeMenu = null;    // submenú "FORMA DE ZONA" abierto desde Delimitar Zonas
 
+			// Recorte por polígono dibujado a mano (prisma recto en la dirección de la vista)
+			this.polygonMode = false;
+			this._polygonPoints = [];     // puntos 3D (mundo) pintados sobre la nube, máx 8
+			this._polygonPreview = null;  // Potree.Measure (contorno cerrado) de previsualización
+			this._polygonCamera = null;   // cámara ortográfica capturada al empezar (define la extrusión)
+			this._polygonClips = [];      // PolygonClipVolume creados, para poder borrarlos
+
 			// Edición de classification por punto
 			this.editClassMode = false;
 			this.editClassMenu = null;
@@ -88290,35 +88313,39 @@ ENDSEC
 			const bgMat = new MeshBasicMaterial({
 				color: 0x0d1b2e, transparent: true, opacity: 0.88, side: DoubleSide,
 			});
-			const bg = new Mesh(new PlaneGeometry(0.70, 0.90), bgMat);
+			const bg = new Mesh(new PlaneGeometry(0.70, 1.04), bgMat);
 			group.add(bg);
 
 			const title = new Potree.TextSprite('RECORTADO DE ZONAS');
 			title.scale.set(0.055, 0.055, 0.055);
-			title.position.set(0, 0.35, 0.002);
+			title.position.set(0, 0.42, 0.002);
 			group.add(title);
 
 			const btnDelimit = this._createMenuButton('Delimitar Zonas', 'CLIP_DELIMIT');
-			btnDelimit.position.set(0, 0.20, 0.002);
+			btnDelimit.position.set(0, 0.28, 0.002);
 			group.add(btnDelimit);
 
+			const btnPolygon = this._createMenuButton('Dibujar Polígono', 'CLIP_POLYGON');
+			btnPolygon.position.set(0, 0.14, 0.002);
+			group.add(btnPolygon);
+
 			const btnModify = this._createMenuButton('Modificar Zonas', 'OPEN_CLIP_TASK');
-			btnModify.position.set(0, 0.05, 0.002);
+			btnModify.position.set(0, 0.00, 0.002);
 			group.add(btnModify);
 
 			const btnReclassify = this._createMenuButton('Reclasif.\nZona', 'OPEN_CLASS_FOR_CLIP');
-			btnReclassify.position.set(0, -0.10, 0.002);
+			btnReclassify.position.set(0, -0.14, 0.002);
 			group.add(btnReclassify);
 
 			const btnDelete = this._createMenuButton('Eliminar Zonas', 'CLIP_DELETE');
-			btnDelete.position.set(0, -0.25, 0.002);
+			btnDelete.position.set(0, -0.28, 0.002);
 			group.add(btnDelete);
 
 			const btnBack = this._createMenuButton('← Volver', 'BACK_TO_MAIN');
-			btnBack.position.set(0, -0.39, 0.002);
+			btnBack.position.set(0, -0.42, 0.002);
 			group.add(btnBack);
 
-			group.userData.interactives = [btnDelimit, btnModify, btnReclassify, btnDelete, btnBack];
+			group.userData.interactives = [btnDelimit, btnPolygon, btnModify, btnReclassify, btnDelete, btnBack];
 			this.viewer.sceneVR.add(group);
 			this.clipMenu = group;
 		}
@@ -88805,6 +88832,10 @@ ENDSEC
 						this._showMenu(this.clipShapeMenu);
 						return;
 					}
+					if(ud.modeId === 'CLIP_POLYGON'){
+						this._startPolygonMode();
+						return;
+					}
 					if(ud.modeId === 'CLIP_SHAPE_BOX'){
 						this.clipShape = 'box';
 						this._startClipMode();
@@ -88851,8 +88882,8 @@ ENDSEC
 						return;
 					}
 					if(ud.modeId === 'OPEN_CLASS_FOR_CLIP'){
-						if(this.clipBoxes.length === 0){
-							console.log('[EditClass] no hay cajas de recorte: coloca una zona primero (Delimitar Zonas).');
+						if(this.clipBoxes.length === 0 && this._polygonClips.length === 0){
+							console.log('[EditClass] no hay zonas de recorte: coloca una zona primero (Delimitar Zonas o Dibujar Polígono).');
 							return;
 						}
 						this.editClassSegmentMode = true;
@@ -88938,6 +88969,11 @@ ENDSEC
 				return;
 			}
 
+			if(this.polygonMode){
+				this._addPolygonPoint(controller);
+				return;
+			}
+
 			if(this.pointsMode){
 				this._placeVRPoint(controller);
 				return;
@@ -88979,6 +89015,11 @@ ENDSEC
 			if(this.anomaliesActive){
 				this.anomaliesActive = false;
 				document.dispatchEvent(new CustomEvent('vr-anomalies-toggle', { detail: { active: false } }));
+				return;
+			}
+
+			if(this.polygonMode){
+				this._finishPolygon();
 				return;
 			}
 
@@ -89211,6 +89252,126 @@ ENDSEC
 			}
 			this._savedPointSizes = null;
 			this._placementShrinkActive = false;
+		}
+
+		// ===== Recorte por polígono dibujado a mano =====
+
+		_startPolygonMode(){
+			if(this.pointsMode) this._finishMeasurement();
+			this.polygonMode = true;
+			this._polygonPoints = [];
+
+			// Cámara de proyección "según tu vista": ortográfica situada en la pose de la cabeza
+			// y orientada en la dirección de la mirada → el recorte se extruye como prisma recto
+			// en esa dirección. Espacio escena (mismo que _raycastPointClouds, vía this.toScene).
+			const fakeCam = new PerspectiveCamera();
+			const camVR = this.viewer.renderer.xr.getCamera(fakeCam);
+			const vrPos = camVR.getWorldPosition(new Vector3());
+			const vrDir = camVR.getWorldDirection(new Vector3());
+			const scenePos = this.toScene(vrPos);
+			const sceneDir = this.toScene(vrPos.clone().add(vrDir)).sub(scenePos).normalize();
+
+			// Tamaño del frustum ortográfico ~ diagonal de la nube (irrelevante para el test, que
+			// es invariante a escala, pero mantiene NDC en un rango razonable).
+			const pc = this.viewer.scene.pointclouds[0];
+			let half = 50;
+			if(pc && pc.boundingBox){
+				const d = pc.boundingBox.getSize(new Vector3()).length();
+				if(d > 0) half = d * 0.5;
+			}
+
+			const cam = new OrthographicCamera(-half, half, half, -half, 0.01, Math.max(half * 10, 1000));
+			// up = Z de Potree; si la mirada es casi vertical, usar un up alternativo para evitar
+			// una orientación degenerada en lookAt.
+			const up = (Math.abs(sceneDir.z) > 0.99) ? new Vector3(0, 1, 0) : new Vector3(0, 0, 1);
+			cam.up.copy(up);
+			cam.position.copy(scenePos);
+			cam.lookAt(scenePos.clone().add(sceneDir));
+			cam.updateMatrix();
+			cam.updateMatrixWorld();
+			cam.updateProjectionMatrix();
+			this._polygonCamera = cam;
+
+			// Previsualización del contorno (Potree.Measure cerrado, se renderiza en VR)
+			const m = new Potree.Measure();
+			m.name = 'VR Polígono';
+			m.showDistances = false;
+			m.showHeight = false;
+			m.showArea = false;
+			m.showCoordinates = false;
+			m.showAngles = false;
+			m.showCircle = false;
+			m.showAzimuth = false;
+			m.showEdges = true;
+			m.closed = true;
+			m.maxMarkers = Infinity;
+			this.viewer.scene.addMeasurement(m);
+			this._polygonPreview = m;
+
+			this._hideAllMenus();
+			this._setLaserLength(true);
+		}
+
+		_addPolygonPoint(controller){
+			if(this._polygonPoints.length >= 8) return; // límite del shader (max_clip_polygons)
+			const pos = this._raycastPointClouds(controller);
+			if(!pos) return;
+
+			this._polygonPoints.push(pos.clone());
+
+			// El último marker es el preview; lo fijamos y añadimos uno nuevo (patrón de _placeVRPoint)
+			const m = this._polygonPreview;
+			if(m){
+				if(m.points.length > 0) m.setPosition(m.points.length - 1, pos);
+				m.addMarker(pos);
+			}
+		}
+
+		_updatePolygonPreview(controller){
+			if(!this.polygonMode || !controller) return;
+			const pos = this._raycastPointClouds(controller);
+			if(!pos) return;
+			const m = this._polygonPreview;
+			if(!m) return;
+			if(m.points.length === 0){
+				m.addMarker(pos);
+			}else {
+				m.setPosition(m.points.length - 1, pos);
+			}
+		}
+
+		_finishPolygon(){
+			if(this._polygonPoints.length >= 3 && this._polygonCamera){
+				const v = new Potree.PolygonClipVolume(this._polygonCamera);
+				// proj·view: proyecta los puntos pintados (mundo) a NDC, igual que hará el shader
+				// con proj·view·world·p_local. Guardamos los markers en NDC.
+				const vp = v.projMatrix.clone().multiply(v.viewMatrix);
+				const n = Math.min(this._polygonPoints.length, 8);
+				for(let i = 0; i < n; i++){
+					const ndc = this._polygonPoints[i].clone().applyMatrix4(vp);
+					const marker = new Mesh();
+					marker.position.set(ndc.x, ndc.y, 0);
+					v.markers.push(marker);
+				}
+				v.initialized = true;
+				this.viewer.scene.addPolygonClipVolume(v);
+				this._polygonClips.push(v);
+
+				// Asegurar que el recorte sea visible si aún no se eligió una tarea de recorte.
+				if(this.viewer.getClipTask() === Potree.ClipTask.NONE){
+					this.viewer.setClipTask(Potree.ClipTask.SHOW_INSIDE);
+				}
+			}
+
+			if(this._polygonPreview){
+				this.viewer.scene.removeMeasurement(this._polygonPreview);
+				this._polygonPreview = null;
+			}
+			this._polygonPoints = [];
+			this._polygonCamera = null;
+			this.polygonMode = false;
+			this._setLaserLength(false);
+			this._showMenu(this.clipMenu);
 		}
 
 		// ===== Punto de información =====
@@ -89532,13 +89693,13 @@ ENDSEC
 		// (unión por forma exacta). Itera nodos cargados/visibles, escribe en el buffer de
 		// classification y registra cada cambio en editClassLog (lo verás luego en el TXT).
 		_applyEditClassToClipBoxes(newCode, newName){
-			if(!this.clipBoxes.length){
+			if(!this.clipBoxes.length && !this._polygonClips.length){
 				this.editClassSegmentMode = false;
 				this._showMenu(this.clipMenu);
 				return;
 			}
 
-			// AABBs en mundo (Box3) para todas las cajas (axis-aligned, sin rotación)
+			// AABBs en mundo (Box3) para cajas/esferas/cilindros (axis-aligned, sin rotación)
 			const aabbs = this.clipBoxes.map(({volume}) => {
 				const h = volume.scale.clone().multiplyScalar(0.5);
 				return new Box3(
@@ -89547,9 +89708,15 @@ ENDSEC
 				);
 			});
 
-			// Unión de las AABBs para descartar nodos cuya bbox no toque ninguna caja
-			const unionAabb = aabbs[0].clone();
-			for(let i = 1; i < aabbs.length; i++) unionAabb.union(aabbs[i]);
+			// Unión de las AABBs para descartar nodos que no tocan ninguna caja. Solo se usa como
+			// pre-filtrado cuando NO hay polígonos: el prisma de un polígono es infinito y no tiene
+			// AABB acotada, así que con polígonos hay que examinar todos los nodos.
+			let unionAabb = null;
+			for(const b of aabbs){ unionAabb = unionAabb ? unionAabb.union(b) : b.clone(); }
+			const usePreFilter = this.clipBoxes.length > 0 && this._polygonClips.length === 0;
+
+			// proj·view de cada polígono (precomputado): proyecta puntos de mundo a NDC.
+			const polyVPs = this._polygonClips.map(v => v.projMatrix.clone().multiply(v.viewMatrix));
 
 			const tmp = new Vector3();
 			const nodeBox = new Box3();
@@ -89563,8 +89730,8 @@ ENDSEC
 					const classAttr = sn.geometry.attributes.classification;
 					if(!posAttr || !classAttr) continue;
 
-					// Pre-filtrado: saltar nodos cuya bbox (en mundo) no interseca la unión de cajas
-					if(sn.geometry.boundingBox){
+					// Pre-filtrado por AABB de cajas (solo cuando no hay polígonos)
+					if(usePreFilter && unionAabb && sn.geometry.boundingBox){
 						nodeBox.copy(sn.geometry.boundingBox).applyMatrix4(sn.matrixWorld);
 						if(!nodeBox.intersectsBox(unionAabb)) continue;
 					}
@@ -89573,10 +89740,15 @@ ENDSEC
 					let nodeChanged = false;
 					for(let i = 0; i < posAttr.count; i++){
 						tmp.fromBufferAttribute(posAttr, i).applyMatrix4(mat);
-						// Test por forma (esfera/cilindro/cubo) — aabbs solo se usa para el pre-filtrado de nodo
+						// Dentro de cualquier zona: caja/esfera/cilindro (forma exacta) o polígono
 						let inside = false;
 						for(const entry of this.clipBoxes){
 							if(this._pointInClipEntry(tmp, entry)){ inside = true; break; }
+						}
+						if(!inside){
+							for(let k = 0; k < polyVPs.length; k++){
+								if(this._pointInPolygonClip(tmp, this._polygonClips[k], polyVPs[k])){ inside = true; break; }
+							}
 						}
 						if(!inside) continue;
 						if(this._changePointClassification(node, i, tmp.clone(), pc, newCode, newName)){
@@ -89591,6 +89763,23 @@ ENDSEC
 			console.log(`[EditClass] segmento: ${changed} puntos reclasificados a '${newName}'`);
 			this.editClassSegmentMode = false;
 			this._showMenu(this.clipMenu);
+		}
+
+		// Test punto-en-polígono (prisma según la cámara del PolygonClipVolume), replicando el
+		// algoritmo de ray-casting 2D en NDC del shader (pointInClipPolygon). `vp` = proj·view.
+		_pointInPolygonClip(worldPos, volume, vp){
+			const ndc = worldPos.clone().applyMatrix4(vp);
+			const m = volume.markers;
+			let inside = false;
+			for(let i = 0, j = m.length - 1; i < m.length; j = i++){
+				const xi = m[i].position.x, yi = m[i].position.y;
+				const xj = m[j].position.x, yj = m[j].position.y;
+				if(((yi > ndc.y) !== (yj > ndc.y)) &&
+				   (ndc.x < (xj - xi) * (ndc.y - yi) / (yj - yi) + xi)){
+					inside = !inside;
+				}
+			}
+			return inside;
 		}
 
 		_exportEditClassLog(){
@@ -89717,6 +89906,7 @@ ENDSEC
 			const v = new Potree.BoxVolume();
 			v.clip = true;
 			v.name = 'VR Clip ' + (this.clipBoxes.length + 1) + ' (' + shape + ')';
+			v.userData.clipShape = shape; // leído por viewer.js para separar el tipo de test en el shader
 			v.position.copy(pos);
 			v.scale.set(edge, edge, edge);
 
@@ -89859,6 +90049,12 @@ ENDSEC
 			this.clipBoxes = [];
 			this._clipHovered = null;
 			this._clipDragging = null;
+
+			// Borrar también los recortes por polígono
+			for(const v of this._polygonClips){
+				this.viewer.scene.removePolygonClipVolume(v);
+			}
+			this._polygonClips = [];
 		}
 
 		_updateAxisDrag(pointer){
@@ -89947,7 +90143,7 @@ ENDSEC
 
 			// Reducir el tamaño de punto al mínimo mientras se colocan medidas, puntos de
 			// información o se edita clasificación, para apuntar con más precisión.
-			const placing = this.pointsMode || this.infoPointMode || this.editClassMode;
+			const placing = this.pointsMode || this.infoPointMode || this.editClassMode || this.polygonMode;
 			if(placing && !this._placementShrinkActive){
 				this._shrinkPointSizeForPlacement();
 			}else if(!placing && this._placementShrinkActive){
@@ -89963,6 +90159,11 @@ ENDSEC
 				} catch(e) {
 					console.log('[VRPTS] ERROR preview: ' + e.message + '\n' + (e.stack || ''));
 				}
+			}
+
+			// Preview del modo Dibujar Polígono (arista en vivo desde el último punto)
+			if(this.polygonMode && !(this.activeMenu && this.activeMenu.visible)){
+				this._updatePolygonPreview(pointer);
 			}
 
 			// Preview del modo Punto de Info
@@ -91998,31 +92199,29 @@ ENDSEC
 			}
 
 			{ // update clip boxes
-				let boxes = [];
-				
-				// volumes with clipping enabled
-				//boxes.push(...this.scene.volumes.filter(v => (v.clip)));
-				boxes.push(...this.scene.volumes.filter(v => (v.clip && v instanceof BoxVolume)));
+				const shapeTypeOf = { 'sphere': 1, 'cylinder': 2 };
 
-				// profile segments
-				for(let profile of this.scene.profiles){
-					boxes.push(...profile.boxes);
-				}
-				
-				// Needed for .getInverse(), pre-empt a determinant of 0, see #815 / #816
+				let rawVols = [...this.scene.volumes.filter(v => v.clip && v instanceof BoxVolume)];
+				for(let profile of this.scene.profiles){ rawVols.push(...profile.boxes); }
+
 				let degenerate = (box) => box.matrixWorld.determinant() !== 0;
-				
-				let clipBoxes = boxes.filter(degenerate).map( box => {
-					box.updateMatrixWorld();
-					
-					let boxInverse = box.matrixWorld.clone().invert();
-					let boxPosition = box.getWorldPosition(new Vector3());
+				let validVols = rawVols.filter(degenerate);
 
-					return {box: box, inverse: boxInverse, position: boxPosition};
+				// Cada volumen lleva su propia forma (0=cubo, 1=esfera, 2=cilindro), leída de
+				// userData.clipShape. Los profile.boxes no la tienen → 0 (cubo). El índice queda
+				// alineado con clipBoxes[] en el shader.
+				let clipBoxes = validVols.map(v => {
+					v.updateMatrixWorld();
+					return {
+						box: v,
+						inverse: v.matrixWorld.clone().invert(),
+						position: v.getWorldPosition(new Vector3()),
+						shape: shapeTypeOf[v.userData && v.userData.clipShape] || 0,
+					};
 				});
 
 				let clipPolygons = this.scene.polygonClipVolumes.filter(vol => vol.initialized);
-				
+
 				// set clip volumes in material
 				for(let pointcloud of visiblePointClouds){
 					pointcloud.material.setClipBoxes(clipBoxes);

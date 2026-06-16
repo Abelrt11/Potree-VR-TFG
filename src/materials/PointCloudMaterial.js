@@ -100,10 +100,9 @@ export class PointCloudMaterial extends THREE.RawShaderMaterial {
 			elevationRange:		{ type: "2fv", value: [0, 0] },
 
 			clipBoxCount:		{ type: "f", value: 0 },
-			//clipSphereCount:	{ type: "f", value: 0 },
 			clipPolygonCount:	{ type: "i", value: 0 },
 			clipBoxes:			{ type: "Matrix4fv", value: [] },
-			//clipSpheres:		{ type: "Matrix4fv", value: [] },
+			clipBoxShapes:		{ type: "iv", value: [] }, // forma por volumen: 0=cubo, 1=esfera, 2=cilindro
 			clipPolygons:		{ type: "3fv", value: [] },
 			clipPolygonVCount:	{ type: "iv", value: [] },
 			clipPolygonVP:		{ type: "Matrix4fv", value: [] },
@@ -290,11 +289,13 @@ export class PointCloudMaterial extends THREE.RawShaderMaterial {
 		}
 
 		this.uniforms.clipBoxes.value = new Float32Array(this.clipBoxes.length * 16);
+		this.uniforms.clipBoxShapes.value = new Int32Array(this.clipBoxes.length);
 
 		for (let i = 0; i < this.clipBoxes.length; i++) {
 			let box = clipBoxes[i];
 
 			this.uniforms.clipBoxes.value.set(box.inverse.elements, 16 * i);
+			this.uniforms.clipBoxShapes.value[i] = box.shape || 0; // forma por volumen
 		}
 
 		for (let i = 0; i < this.uniforms.clipBoxes.value.length; i++) {
