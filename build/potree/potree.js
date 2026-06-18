@@ -88202,22 +88202,10 @@ ENDSEC
 			group.add(sliderPB.group);
 			interactives.push(...sliderPB.interactives);
 
-			// Slider: FOV
-			const sliderFOV = this._createSliderWidget({
-				label: 'FOV',
-				min: 20, max: 100, step: 1,
-				getValue: () => this.viewer.getFOV(),
-				setValue: (v) => this.viewer.setFOV(v),
-				valueFormat: (v) => v.toFixed(0) + '°',
-			});
-			sliderFOV.group.position.set(0, 0.32, 0.002);
-			group.add(sliderFOV.group);
-			interactives.push(...sliderFOV.interactives);
-
 			// Sección: Fondo
 			const fondoLabel = new Potree.TextSprite('FONDO');
 			fondoLabel.scale.set(0.07, 0.07, 0.07);
-			fondoLabel.position.set(0, 0.19, 0.002);
+			fondoLabel.position.set(0, 0.32, 0.002);
 			group.add(fondoLabel);
 
 			const radioFondo = this._createRadioGroupWidget({
@@ -88230,14 +88218,14 @@ ENDSEC
 				getValue: () => this.viewer.getBackground(),
 				setValue: (v) => this.viewer.setBackground(v),
 			});
-			radioFondo.group.position.set(0, 0.03, 0.002);
+			radioFondo.group.position.set(0, 0.16, 0.002);
 			group.add(radioFondo.group);
 			interactives.push(...radioFondo.interactives);
 
 			// Sección: Calidad Splat
 			const qualityLabel = new Potree.TextSprite('CALIDAD SPLAT');
 			qualityLabel.scale.set(0.07, 0.07, 0.07);
-			qualityLabel.position.set(0, -0.14, 0.002);
+			qualityLabel.position.set(0, -0.01, 0.002);
 			group.add(qualityLabel);
 
 			const radioQuality = this._createRadioGroupWidget({
@@ -88248,21 +88236,22 @@ ENDSEC
 				getValue: () => this.viewer.useHQ ? 'hq' : 'standard',
 				setValue: (v) => { this.viewer.useHQ = (v === 'hq'); },
 			});
-			radioQuality.group.position.set(0, -0.24, 0.002);
+			radioQuality.group.position.set(0, -0.11, 0.002);
 			group.add(radioQuality.group);
 			interactives.push(...radioQuality.interactives);
 
-			// Slider: Tamaño de Nodo
-			const sliderNodeSize = this._createSliderWidget({
-				label: 'Tam. Nodo',
-				min: 0, max: 1000, step: 10,
-				getValue: () => this.viewer.getMinNodeSize(),
-				setValue: (v) => this.viewer.setMinNodeSize(v),
-				valueFormat: (v) => v.toFixed(0),
+			// Slider: Tamaño de punto (material.size de las nubes). 0 = diminuto: el shader lo
+			// limita a minSize (~2px), igual que en los modos de colocación de medidas.
+			const sliderPointSize = this._createSliderWidget({
+				label: 'Tamaño de punto',
+				min: 0, max: 3, step: 0.05,
+				getValue: () => { const pc = this.viewer.scene.pointclouds[0]; return pc ? pc.material.size : 1; },
+				setValue: (v) => { for(const pc of this.viewer.scene.pointclouds){ if(pc && pc.material) pc.material.size = v; } },
+				valueFormat: (v) => v.toFixed(2),
 			});
-			sliderNodeSize.group.position.set(0, -0.40, 0.002);
-			group.add(sliderNodeSize.group);
-			interactives.push(...sliderNodeSize.interactives);
+			sliderPointSize.group.position.set(0, -0.27, 0.002);
+			group.add(sliderPointSize.group);
+			interactives.push(...sliderPointSize.interactives);
 
 			// Checkbox: Box (muestra las bounding boxes del octree)
 			const toggleBox = this._createToggleWidget({
@@ -88270,13 +88259,13 @@ ENDSEC
 				getValue: () => this.viewer.getShowBoundingBox(),
 				setValue: (v) => this.viewer.setShowBoundingBox(v),
 			});
-			toggleBox.group.position.set(0, -0.48, 0.002);
+			toggleBox.group.position.set(0, -0.35, 0.002);
 			group.add(toggleBox.group);
 			interactives.push(...toggleBox.interactives);
 
 			// Botón Volver
 			const btnBack = this._createMenuButton('← Volver', 'BACK_TO_MAIN');
-			btnBack.position.set(0, -0.62, 0.002);
+			btnBack.position.set(0, -0.49, 0.002);
 			group.add(btnBack);
 			interactives.push(btnBack);
 
@@ -88286,14 +88275,8 @@ ENDSEC
 			this.viewer.addEventListener('point_budget_changed', () => {
 				sliderPB.group.userData.refreshUI(this.viewer.getPointBudget());
 			});
-			this.viewer.addEventListener('fov_changed', () => {
-				sliderFOV.group.userData.refreshUI(this.viewer.getFOV());
-			});
 			this.viewer.addEventListener('background_changed', () => {
 				radioFondo.refreshAll();
-			});
-			this.viewer.addEventListener('minnodesize_changed', () => {
-				sliderNodeSize.group.userData.refreshUI(this.viewer.getMinNodeSize());
 			});
 			this.viewer.addEventListener('show_boundingbox_changed', () => {
 				toggleBox.interactives[0].userData.refreshUI(this.viewer.getShowBoundingBox());
