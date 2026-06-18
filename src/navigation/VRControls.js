@@ -14,6 +14,16 @@ const CLASS_COLOR_PALETTE = [
 	[1.0, 0.0, 1.0], [0.0, 1.0, 1.0], [1.0, 0.5, 0.0], [1.0, 1.0, 1.0],
 ];
 
+// Picking en VR: semiángulo (grados) del cono de selección alrededor del puntero.
+// Solo se consideran puntos dentro de este cono; entre ellos gana el más cercano al
+// mando (primera superficie), no el más pegado a la recta infinita. Ajustable.
+const VR_PICK_CONE_HALF_ANGLE_DEG = 1.5;
+const VR_PICK_TAN2 = Math.tan(VR_PICK_CONE_HALF_ANGLE_DEG * Math.PI / 180) ** 2;
+
+// Giro suave del joystick izquierdo: rad/s a deflexión máxima y zona muerta.
+const VR_TURN_SPEED_RAD_PER_SEC = Math.PI * 0.6; // ~108°/s, ajustable
+const VR_TURN_DEADZONE = 0.2;
+
 function toScene(vec, ref){
 	let node = ref.clone();
 	node.updateMatrix();
@@ -66,8 +76,24 @@ function computeMove(vrControls, controller){
 	let p2 = vrControls.toScene(controller.position.clone().add(move));
 
 	move = p2.clone().sub(p1);
-	
+
 	return move;
+};
+
+// Lee el eje X del joystick (giro). Aplica zona muerta para evitar deriva en reposo.
+function computeTurn(controller){
+	if(!controller || !controller.inputSource || !controller.inputSource.gamepad){
+		return 0;
+	}
+
+	let axes = controller.inputSource.gamepad.axes;
+	let x = (axes.length === 2) ? axes[0] : (axes.length === 4) ? axes[2] : 0;
+
+	if(Math.abs(x) < VR_TURN_DEADZONE){
+		return 0;
+	}
+
+	return x;
 };
 
 
@@ -93,26 +119,25 @@ class FlyMode{
 
 	update(vrControls, delta){
 
-		let primary = vrControls.cPrimary;
-		let secondary = vrControls.cSecondary;
+		// Mando derecho = avanzar/retroceder; mando izquierdo = girar.
+		let right = vrControls._getRightController() || vrControls.cPrimary;
+		let left  = vrControls._getLeftController()
+			|| (right === vrControls.cPrimary ? vrControls.cSecondary : vrControls.cPrimary);
 
-		let move1 = computeMove(vrControls, primary);
-		let move2 = computeMove(vrControls, secondary);
+		let primary = right;
 
-
-		if(!move1){
-			move1 = new THREE.Vector3();
-		}
-
-		if(!move2){
-			move2 = new THREE.Vector3();
-		}
-
-		let move = move1.clone().add(move2);
+		// Avance solo con el mando derecho (el izquierdo ya no avanza, solo gira).
+		let move = computeMove(vrControls, right) || new THREE.Vector3();
 
 		move.multiplyScalar(-delta * this.moveFactor);
 		vrControls.node.position.add(move);
-		
+
+		// Giro suave y continuo con el eje X del joystick izquierdo, antes de
+		// volcar la orientación a la vista de escritorio (setView, más abajo).
+		let turnX = computeTurn(left);
+		if(turnX !== 0){
+			vrControls.rotateView(-turnX * VR_TURN_SPEED_RAD_PER_SEC * delta);
+		}
 
 		let scale = vrControls.node.scale.x;
 
@@ -482,12 +507,27 @@ export class VRControls extends EventDispatcher{
 		// Contexto: rejilla "Editar Clasificación" abierta desde el clip → aplicar al segmento (cajas)
 		this.editClassSegmentMode = false;
 
+		// Reclasificación en dos pasos: primero clase de ORIGEN, luego DESTINO.
+		// Solo los puntos cuya clase actual == origen cambian al destino. Aplica a TODOS los modos.
+		this.editClassOrigin = null;        // { code, name } | null (null = eligiendo origen)
+		this.editClassTitle = null;         // sprite del título de la rejilla (se actualiza por paso)
+		this.editClassHint = null;          // sprite de la pista de la rejilla
+
+		// Modo de reclasificación por apuntado: 'point' (punto por punto) | 'spray'
+		this.reclassMode = 'point';
+		this.reclassModeMenu = null;
+		this.editClassSprayActive = false;  // true mientras se mantiene el gatillo en spray
+		this.editClassSprayRadius = 1.0;    // radio del pincel, en unidades de la nube (m). Mín 1.0 m (mostrado como 10 cm)
+		this.editClassBrushPreview = null;  // esfera de previsualización del pincel
+		this._editClassSprayHapticTs = 0;   // throttle del feedback háptico
+
 		document.addEventListener('vr-mode-select', (e) => {
 			if(e.detail.mode !== 3 && this.pointsMode) this._finishMeasurement();
 			this.pointsMode = (e.detail.mode === 3);
 			if(this.infoPointMode){ this.infoPointMode = false; this._clearInfoPreview(); }
 			if(this.editClassMode){ this.editClassMode = false; this._clearEditClassPreview(); }
 			if(this.editClassSegmentMode){ this.editClassSegmentMode = false; }
+			this.editClassSprayActive = false;
 		});
 	}
 
@@ -550,6 +590,7 @@ export class VRControls extends EventDispatcher{
 		this._createClipTaskMenu();
 		this._createClipShapeMenu();
 		this._createEditClassMenu();
+		this._createReclassModeMenu();
 	}
 
 	_createVRMenu(){
@@ -789,6 +830,7 @@ export class VRControls extends EventDispatcher{
 		if(this.clipTaskMenu) this.clipTaskMenu.visible = false;
 		if(this.clipShapeMenu) this.clipShapeMenu.visible = false;
 		if(this.editClassMenu) this.editClassMenu.visible = false;
+		if(this.reclassModeMenu) this.reclassModeMenu.visible = false;
 		this.activeMenu = null;
 		this._setLaserLength(false);
 	}
@@ -1223,6 +1265,54 @@ export class VRControls extends EventDispatcher{
 		this.clipShapeMenu = group;
 	}
 
+	// Submenú para elegir el modo de reclasificación por apuntado (punto a punto / spray)
+	// y ajustar el radio del pincel de spray. Se abre desde "Editar Clasificación".
+	_createReclassModeMenu(){
+		const group = new THREE.Group();
+		group.name = 'vr-reclass-mode-menu';
+		group.visible = false;
+
+		const bgMat = new THREE.MeshBasicMaterial({
+			color: 0x0d1b2e, transparent: true, opacity: 0.88, side: THREE.DoubleSide,
+		});
+		const bg = new THREE.Mesh(new THREE.PlaneGeometry(0.80, 0.84), bgMat);
+		group.add(bg);
+
+		const title = new Potree.TextSprite('RECLASIFICAR');
+		title.scale.set(0.08, 0.08, 0.08);
+		title.position.set(0, 0.32, 0.002);
+		group.add(title);
+
+		const modeBtnOpts = { width: 0.60, height: 0.15, canvasW: 520 };
+		const btnPoint = this._createMenuButton('Reclasificar\npunto por punto', 'RECLASSIFY_MODE_POINT', modeBtnOpts);
+		btnPoint.position.set(0, 0.17, 0.002);
+		group.add(btnPoint);
+
+		const btnSpray = this._createMenuButton('Reclasificar\nen spray', 'RECLASSIFY_MODE_SPRAY', modeBtnOpts);
+		btnSpray.position.set(0, 0.01, 0.002);
+		group.add(btnSpray);
+
+		// Slider: radio del pincel de spray. Se MUESTRA en cm (10–50) pero el radio real
+		// va de 1.0 m a 5.0 m (sin cambios). Mapeo lineal: 10 cm ↔ 1.0 m, 50 cm ↔ 5.0 m (cm = m·10).
+		const sliderRadius = this._createSliderWidget({
+			label: 'Radio spray',
+			min: 10, max: 50, step: 1,
+			getValue: () => this.editClassSprayRadius * 10,
+			setValue: (cm) => { this.editClassSprayRadius = cm / 10; },
+			valueFormat: (v) => v.toFixed(0) + ' cm',
+		});
+		sliderRadius.group.position.set(0, -0.17, 0.002);
+		group.add(sliderRadius.group);
+
+		const btnBack = this._createMenuButton('← Volver', 'BACK_TO_MAIN');
+		btnBack.position.set(0, -0.34, 0.002);
+		group.add(btnBack);
+
+		group.userData.interactives = [btnPoint, btnSpray, ...sliderRadius.interactives, btnBack];
+		this.viewer.sceneVR.add(group);
+		this.reclassModeMenu = group;
+	}
+
 	_createAttributeMenu(){
 		const group = new THREE.Group();
 		group.name = 'vr-attribute-menu';
@@ -1337,11 +1427,13 @@ export class VRControls extends EventDispatcher{
 		title.scale.set(0.10, 0.10, 0.10);
 		title.position.set(0, 0.62, 0.002);
 		group.add(title);
+		this.editClassTitle = title;
 
 		const hint = new Potree.TextSprite('Elige una clase, apunta y pulsa trigger');
 		hint.scale.set(0.06, 0.06, 0.06);
 		hint.position.set(0, 0.53, 0.002);
 		group.add(hint);
+		this.editClassHint = hint;
 
 		// Lista de clases del ClassificationScheme DEFAULT (códigos numéricos)
 		const scheme = this.viewer.classifications;
@@ -1352,7 +1444,7 @@ export class VRControls extends EventDispatcher{
 
 		const interactives = [];
 		const COLS = 2;
-		const ROW_H = 0.155;
+		const ROW_H = 0.145;
 		const Y0 = 0.40;
 		const btnOpts = { width: 0.52, height: 0.14, canvasW: 464 };
 		codes.forEach((code, i) => {
@@ -1371,17 +1463,38 @@ export class VRControls extends EventDispatcher{
 			interactives.push(btn);
 		});
 
+		// Botón "default" (el DEFAULT real de Potree): como ORIGEN selecciona los puntos cuya clase
+		// NO está nombrada en el esquema (los que se pintan con el color default). No vale como DESTINO.
+		const btnDefault = this._createMenuButton('default', 'EDIT_CLASS_SET_TARGET', btnOpts);
+		btnDefault.userData.realDefault = true;
+		{
+			const di = codes.length;
+			const dCol = di % COLS;
+			const dRow = Math.floor(di / COLS);
+			btnDefault.position.set(dCol === 0 ? -0.29 : 0.29, Y0 - dRow * ROW_H, 0.002);
+		}
+		group.add(btnDefault);
+		interactives.push(btnDefault);
+
+		// Botón "Cualquiera": como ORIGEN reclasifica TODOS los puntos (sin filtrar por clase).
+		// Útil para reclasificar una zona entera o cualquier punto apuntado. No vale como DESTINO.
+		const btnAny = this._createMenuButton('Cualquiera', 'EDIT_CLASS_SET_TARGET', btnOpts);
+		btnAny.userData.anyOrigin = true;
+		btnAny.position.set(0, -0.475, 0.002);
+		group.add(btnAny);
+		interactives.push(btnAny);
+
 		// Botón "Exportar log .txt"
 		const btnExport = this._createMenuButton('Exportar log .txt', 'EDIT_CLASS_EXPORT_LOG',
 			{ width: 0.40, height: 0.14, canvasW: 360 });
-		btnExport.position.set(-0.29, -0.58, 0.002);
+		btnExport.position.set(-0.29, -0.625, 0.002);
 		group.add(btnExport);
 		interactives.push(btnExport);
 
 		// Botón "Volver"
 		const btnBack = this._createMenuButton('← Volver', 'BACK_TO_MAIN',
 			{ width: 0.40, height: 0.14, canvasW: 360 });
-		btnBack.position.set(0.29, -0.58, 0.002);
+		btnBack.position.set(0.29, -0.625, 0.002);
 		group.add(btnBack);
 		interactives.push(btnBack);
 
@@ -1516,6 +1629,31 @@ export class VRControls extends EventDispatcher{
 		return null;
 	}
 
+	_getLeftController(){
+		for(const c of [this.cPrimary, this.cSecondary]){
+			if(c.inputSource && c.inputSource.handedness === 'left') return c;
+		}
+		return null;
+	}
+
+	// Gira la vista (yaw) alrededor del eje vertical que pasa por la cabeza del
+	// usuario, rotando el nodo del mundo. Mismo patrón que RotScaleMode.
+	rotateView(angle){
+		let node = this.node;
+		let camVR = this.viewer.renderer.xr.getCamera(fakeCam);
+		let vrPos = camVR.getWorldPosition(new THREE.Vector3());
+		let pivot = toScene(vrPos, node);
+
+		node.updateMatrix();
+		node.matrixAutoUpdate = false;
+		node.applyMatrix4(new THREE.Matrix4().makeTranslation(...pivot.clone().multiplyScalar(-1).toArray()));
+		node.applyMatrix4(new THREE.Matrix4().makeRotationZ(angle));
+		node.applyMatrix4(new THREE.Matrix4().makeTranslation(...pivot.toArray()));
+		node.matrix.decompose(node.position, node.quaternion, node.scale);
+		node.matrixAutoUpdate = true;
+		node.updateMatrix();
+	}
+
 	toScene(vec){
 		let camVR = this.getCamera();
 
@@ -1580,6 +1718,12 @@ export class VRControls extends EventDispatcher{
 					return;
 				}
 				if(ud.modeId === 'BACK_TO_MAIN'){
+					// En la rejilla de clases, si ya se eligió ORIGEN, "Volver" regresa a elegir origen
+					if(this.activeMenu === this.editClassMenu && this.editClassOrigin){
+						this.editClassOrigin = null;
+						this._refreshEditClassStep();
+						return;
+					}
 					// Si la rejilla "Editar Clasif." se abrió desde el clip, volver al clip y limpiar el contexto
 					if(this.editClassSegmentMode){
 						this.editClassSegmentMode = false;
@@ -1675,7 +1819,17 @@ export class VRControls extends EventDispatcher{
 
 				// Edición de clasificación
 				if(ud.modeId === 'OPEN_EDIT_CLASS'){
-					this._showMenu(this.editClassMenu);
+					this._showMenu(this.reclassModeMenu);
+					return;
+				}
+				if(ud.modeId === 'RECLASSIFY_MODE_POINT'){
+					this.reclassMode = 'point';
+					this._openEditClassMenuForSelection();
+					return;
+				}
+				if(ud.modeId === 'RECLASSIFY_MODE_SPRAY'){
+					this.reclassMode = 'spray';
+					this._openEditClassMenuForSelection();
 					return;
 				}
 				if(ud.modeId === 'OPEN_CLASS_FOR_CLIP'){
@@ -1684,10 +1838,24 @@ export class VRControls extends EventDispatcher{
 						return;
 					}
 					this.editClassSegmentMode = true;
-					this._showMenu(this.editClassMenu);
+					this._openEditClassMenuForSelection();
 					return;
 				}
 				if(ud.modeId === 'EDIT_CLASS_SET_TARGET'){
+					// Paso 1: elegir clase de ORIGEN. 'Cualquiera' = sin filtro; 'default' = clases no nombradas.
+					if(!this.editClassOrigin){
+						if(ud.anyOrigin){
+							this.editClassOrigin = { any: true, name: 'cualquiera' };
+						}else if(ud.realDefault){
+							this.editClassOrigin = { realDefault: true, name: 'default' };
+						}else{
+							this.editClassOrigin = { code: ud.classCode, name: ud.className };
+						}
+						this._refreshEditClassStep();
+						return;
+					}
+					// Paso 2: elegir DESTINO y aplicar. 'Cualquiera'/'default' no pueden ser destino → ignorar.
+					if(ud.anyOrigin || ud.realDefault) return;
 					if(this.editClassSegmentMode){
 						this._applyEditClassToClipBoxes(ud.classCode, ud.className);
 					}else{
@@ -1762,7 +1930,12 @@ export class VRControls extends EventDispatcher{
 		}
 
 		if(this.editClassMode){
-			this._applyEditClassAtController(controller);
+			if(this.reclassMode === 'spray'){
+				this.editClassSprayActive = true;
+				this._sprayReclassifyAtController(controller); // pasada inmediata (también para taps)
+			}else{
+				this._applyEditClassAtController(controller);
+			}
 			return;
 		}
 
@@ -1789,6 +1962,12 @@ export class VRControls extends EventDispatcher{
 		// Terminar drag si estaba activo
 		if(this._dragging){
 			this._dragging = null;
+			return;
+		}
+
+		// Terminar el spray de reclasificación si estaba activo (no cambiar de modo de navegación)
+		if(this.editClassSprayActive){
+			this.editClassSprayActive = false;
 			return;
 		}
 
@@ -1926,9 +2105,12 @@ export class VRControls extends EventDispatcher{
 		console.log('[VRPTS] ray origin=' + originWorld.x.toFixed(0) + ',' + originWorld.y.toFixed(0) + ',' + originWorld.z.toFixed(0) + ' pcs=' + this.viewer.scene.pointclouds.length);
 
 		const ray = new THREE.Ray(originWorld, dirWorld);
-		const tmp = new THREE.Vector3();
-		let bestPoint = null;
-		let bestPerp2 = Infinity;
+		const invMat = new THREE.Matrix4();
+		const lo = new THREE.Vector3();
+		const ld = new THREE.Vector3();
+		const bestLocal = new THREE.Vector3();
+		let bestNode = null;
+		let bestT = Infinity;
 
 		for(const pc of this.viewer.scene.pointclouds){
 			const nodes = pc.nodesOnRay(pc.visibleNodes, ray);
@@ -1937,20 +2119,26 @@ export class VRControls extends EventDispatcher{
 				if(!node.sceneNode) continue;
 				const posAttr = node.sceneNode.geometry && node.sceneNode.geometry.attributes && node.sceneNode.geometry.attributes.position;
 				if(!posAttr) continue;
-				const mat = node.sceneNode.matrixWorld;
-				for(let i = 0; i < posAttr.count; i += 10){
-					tmp.fromBufferAttribute(posAttr, i).applyMatrix4(mat);
-					const dx = tmp.x - ray.origin.x;
-					const dy = tmp.y - ray.origin.y;
-					const dz = tmp.z - ray.origin.z;
-					const t = dx * ray.direction.x + dy * ray.direction.y + dz * ray.direction.z;
+
+				// Rayo al espacio local del nodo: evita transformar cada punto al mundo (1 inversa
+				// por nodo en vez de 1 producto matriz·vector por punto), así el escaneo completo rinde.
+				invMat.copy(node.sceneNode.matrixWorld).invert();
+				lo.copy(ray.origin).applyMatrix4(invMat);
+				ld.copy(ray.origin).add(ray.direction).applyMatrix4(invMat).sub(lo).normalize();
+
+				for(let i = 0; i < posAttr.count; i++){
+					const px = posAttr.getX(i), py = posAttr.getY(i), pz = posAttr.getZ(i);
+					const dx = px - lo.x, dy = py - lo.y, dz = pz - lo.z;
+					const t = dx * ld.x + dy * ld.y + dz * ld.z;
 					if(t <= 0) continue;
 					const perp2 = dx*dx + dy*dy + dz*dz - t*t;
-					if(perp2 < bestPerp2){ bestPerp2 = perp2; bestPoint = tmp.clone(); }
+					if(perp2 > VR_PICK_TAN2 * t*t) continue;   // fuera del cono angular → descartar
+					if(t < bestT){ bestT = t; bestLocal.set(px, py, pz); bestNode = node; }   // dentro → el más cercano gana
 				}
 			}
 		}
 
+		const bestPoint = bestNode ? bestLocal.applyMatrix4(bestNode.sceneNode.matrixWorld) : null;
 		console.log('[VRPTS] raycast result=' + (bestPoint ? bestPoint.x.toFixed(0)+','+bestPoint.y.toFixed(0) : 'null'));
 		return bestPoint;
 	}
@@ -2184,12 +2372,14 @@ export class VRControls extends EventDispatcher{
 		const dirWorld = this.toScene(originVR.clone().add(dirVR)).sub(originWorld).normalize();
 
 		const ray = new THREE.Ray(originWorld, dirWorld);
-		const tmp = new THREE.Vector3();
-		let bestPoint = null;
-		let bestPerp2 = Infinity;
+		const invMat = new THREE.Matrix4();
+		const lo = new THREE.Vector3();
+		const ld = new THREE.Vector3();
+		const bestLocal = new THREE.Vector3();
 		let bestNode = null;
 		let bestIdx = -1;
 		let bestPc = null;
+		let bestT = Infinity;
 
 		for(const pc of this.viewer.scene.pointclouds){
 			const nodes = pc.nodesOnRay(pc.visibleNodes, ray);
@@ -2197,21 +2387,26 @@ export class VRControls extends EventDispatcher{
 				if(!node.sceneNode) continue;
 				const posAttr = node.sceneNode.geometry && node.sceneNode.geometry.attributes && node.sceneNode.geometry.attributes.position;
 				if(!posAttr) continue;
-				const mat = node.sceneNode.matrixWorld;
-				for(let i = 0; i < posAttr.count; i += 10){
-					tmp.fromBufferAttribute(posAttr, i).applyMatrix4(mat);
-					const dx = tmp.x - ray.origin.x;
-					const dy = tmp.y - ray.origin.y;
-					const dz = tmp.z - ray.origin.z;
-					const t = dx * ray.direction.x + dy * ray.direction.y + dz * ray.direction.z;
+
+				// Rayo al espacio local del nodo (ver _raycastPointClouds): cono angular + más cercano.
+				invMat.copy(node.sceneNode.matrixWorld).invert();
+				lo.copy(ray.origin).applyMatrix4(invMat);
+				ld.copy(ray.origin).add(ray.direction).applyMatrix4(invMat).sub(lo).normalize();
+
+				for(let i = 0; i < posAttr.count; i++){
+					const px = posAttr.getX(i), py = posAttr.getY(i), pz = posAttr.getZ(i);
+					const dx = px - lo.x, dy = py - lo.y, dz = pz - lo.z;
+					const t = dx * ld.x + dy * ld.y + dz * ld.z;
 					if(t <= 0) continue;
 					const perp2 = dx*dx + dy*dy + dz*dz - t*t;
-					if(perp2 < bestPerp2){ bestPerp2 = perp2; bestPoint = tmp.clone(); bestNode = node; bestIdx = i; bestPc = pc; }
+					if(perp2 > VR_PICK_TAN2 * t*t) continue;   // fuera del cono angular → descartar
+					if(t < bestT){ bestT = t; bestLocal.set(px, py, pz); bestNode = node; bestIdx = i; bestPc = pc; }
 				}
 			}
 		}
 
-		if(!bestPoint) return null;
+		if(!bestNode) return null;
+		const bestPoint = bestLocal.applyMatrix4(bestNode.sceneNode.matrixWorld);
 
 		const attrs = {};
 		const geomAttrs = bestNode.sceneNode.geometry.attributes;
@@ -2380,7 +2575,7 @@ export class VRControls extends EventDispatcher{
 		}
 		if(this.editClassMode){
 			this.editClassMode = false;
-			this.editClassPreviewMeasure = null;
+			this._clearEditClassPreview();
 		}
 		// Limpiar referencias propias antes de borrar (removeMeasurement dispara eventos)
 		this.infoPointMeasure = null;
@@ -2401,6 +2596,29 @@ export class VRControls extends EventDispatcher{
 		return (entry && entry.name) ? entry.name : ('clase ' + code);
 	}
 
+	// Actualiza el título/pista de la rejilla según el paso (eligiendo ORIGEN o DESTINO).
+	_refreshEditClassStep(){
+		if(this.editClassTitle){
+			this.editClassTitle.setText(this.editClassOrigin ? 'DESTINO' : 'ORIGEN');
+		}
+		if(this.editClassHint){
+			if(this.editClassOrigin){
+				const o = this.editClassOrigin;
+				const label = o.any ? 'cualquiera' : (o.realDefault ? 'default' : `${o.code} ${o.name}`);
+				this.editClassHint.setText(`Origen: ${label} → elige destino`);
+			}else{
+				this.editClassHint.setText('Elige la clase de ORIGEN (la que se cambiará)');
+			}
+		}
+	}
+
+	// Abre la rejilla de clases empezando una selección nueva (paso ORIGEN).
+	_openEditClassMenuForSelection(){
+		this.editClassOrigin = null;
+		this._refreshEditClassStep();
+		this._showMenu(this.editClassMenu);
+	}
+
 	_setEditClassTarget(code, name){
 		// Salir de modos incompatibles
 		if(this.pointsMode) this._finishMeasurement();
@@ -2416,6 +2634,13 @@ export class VRControls extends EventDispatcher{
 			this.viewer.scene.removeMeasurement(this.editClassPreviewMeasure);
 			this.editClassPreviewMeasure = null;
 		}
+		if(this.editClassBrushPreview){
+			this.viewer.scene.scene.remove(this.editClassBrushPreview);
+			if(this.editClassBrushPreview.geometry) this.editClassBrushPreview.geometry.dispose();
+			if(this.editClassBrushPreview.material) this.editClassBrushPreview.material.dispose();
+			this.editClassBrushPreview = null;
+		}
+		this.editClassSprayActive = false;
 	}
 
 	// Convierte una posición en mundo a coordenadas del pointcloud y devuelve la clave del Map
@@ -2454,12 +2679,107 @@ export class VRControls extends EventDispatcher{
 		}
 	}
 
+	// Pasada de spray: raycast al centro apuntado y pinta la esfera del pincel a su alrededor.
+	_sprayReclassifyAtController(controller){
+		const result = this._raycastPointCloudsWithAttrs(controller);
+		if(result && result.position) this._sprayPaintAtCenter(result.position, controller);
+	}
+
+	// Reclasifica todos los puntos dentro de la esfera de radio editClassSprayRadius centrada
+	// en `center` (mundo). Reutiliza el patrón de recorrido de nodos de _applyEditClassToClipBoxes.
+	_sprayPaintAtCenter(center, controller){
+		if(!this.editClassTarget || !center) return;
+		const newCode = this.editClassTarget.code;
+		const newName = this.editClassTarget.name;
+		const r = this.editClassSprayRadius;
+		const r2 = r * r;
+
+		const brushBox = new THREE.Box3(
+			center.clone().subScalar(r),
+			center.clone().addScalar(r)
+		);
+
+		const tmp = new THREE.Vector3();
+		const nodeBox = new THREE.Box3();
+		let changed = 0;
+
+		for(const pc of this.viewer.scene.pointclouds){
+			for(const node of pc.visibleNodes){
+				const sn = node.sceneNode;
+				if(!sn || !sn.geometry) continue;
+				const posAttr = sn.geometry.attributes.position;
+				const classAttr = sn.geometry.attributes.classification;
+				if(!posAttr || !classAttr) continue;
+
+				// Pre-filtrado: descartar nodos cuya AABB no toca el pincel
+				if(sn.geometry.boundingBox){
+					nodeBox.copy(sn.geometry.boundingBox).applyMatrix4(sn.matrixWorld);
+					if(!nodeBox.intersectsBox(brushBox)) continue;
+				}
+
+				const mat = sn.matrixWorld;
+				let nodeChanged = false;
+				for(let i = 0; i < posAttr.count; i++){
+					tmp.fromBufferAttribute(posAttr, i).applyMatrix4(mat);
+					const dx = tmp.x - center.x, dy = tmp.y - center.y, dz = tmp.z - center.z;
+					if(dx*dx + dy*dy + dz*dz > r2) continue;
+					if(this._changePointClassification(node, i, tmp.clone(), pc, newCode, newName)){
+						changed++;
+						nodeChanged = true;
+					}
+				}
+				if(nodeChanged) classAttr.needsUpdate = true; // un marcado por nodo
+			}
+		}
+
+		// Feedback háptico leve y throttled si se pintó algo
+		if(changed > 0 && controller){
+			const now = (typeof performance !== 'undefined') ? performance.now() : Date.now();
+			if(now - this._editClassSprayHapticTs > 150){
+				this._editClassSprayHapticTs = now;
+				try {
+					const ga = controller.inputSource && controller.inputSource.gamepad;
+					const act = ga && ga.hapticActuators && ga.hapticActuators[0];
+					if(act && act.pulse) act.pulse(0.3, 30);
+				} catch(_) {}
+			}
+		}
+	}
+
+	// Crea/actualiza la esfera translúcida que previsualiza el alcance del pincel de spray.
+	_updateSprayBrushPreview(center){
+		if(!this.editClassBrushPreview){
+			const mat = new THREE.MeshBasicMaterial({
+				color: 0xff00ff, transparent: true, opacity: 0.18,
+				depthWrite: false, side: THREE.DoubleSide,
+			});
+			const mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), mat);
+			mesh.renderOrder = 10;
+			this.editClassBrushPreview = mesh;
+			this.viewer.scene.scene.add(mesh);
+		}
+		this.editClassBrushPreview.visible = true;
+		this.editClassBrushPreview.position.copy(center);
+		const r = this.editClassSprayRadius;
+		this.editClassBrushPreview.scale.set(r, r, r);
+	}
+
 	// Aplica el cambio de clase a UN punto ya identificado. Devuelve true si se modificó.
 	// El llamador debe marcar classAttr.needsUpdate (una sola vez por nodo).
 	_changePointClassification(node, pIndex, worldPos, pc, newCode, newName){
 		const classAttr = node.sceneNode && node.sceneNode.geometry && node.sceneNode.geometry.attributes.classification;
 		if(!classAttr) return false;
 		const oldCode = classAttr.array[pIndex];
+		// Filtro por clase de ORIGEN: 'Cualquiera' (any) no filtra; 'default' (realDefault) coge solo
+		// los códigos SIN entrada propia en el esquema (los que se pintan con el DEFAULT real de Potree).
+		const o = this.editClassOrigin;
+		if(o){
+			if(o.realDefault){
+				if(this.viewer.classifications[oldCode]) return false; // código nombrado → no es 'default' real
+			}else if(!o.any && oldCode !== o.code){
+				return false;
+			}
+		}
 		if(oldCode === newCode) return false;
 		classAttr.array[pIndex] = newCode;
 		this.editClassOverrides.set(this._overrideKey(pc, worldPos), newCode);
@@ -2989,6 +3309,16 @@ export class VRControls extends EventDispatcher{
 					this.editClassPreviewMeasure = m;
 				} else {
 					this.editClassPreviewMeasure.setPosition(0, pos);
+				}
+
+				// Modo spray: esfera del pincel + pintado continuo mientras se mantiene el gatillo
+				if(this.reclassMode === 'spray'){
+					this._updateSprayBrushPreview(pos);
+					if(this.editClassSprayActive){
+						this._sprayPaintAtCenter(pos, pointer);
+					}
+				}else if(this.editClassBrushPreview){
+					this.editClassBrushPreview.visible = false;
 				}
 			}
 		}
