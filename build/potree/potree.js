@@ -87812,8 +87812,8 @@ ENDSEC
 			group.add(bg);
 
 			// Título
-			const title = new Potree.TextSprite('MODO DE VISIÓN');
-			title.scale.set(0.07, 0.07, 0.07);
+			const title = this._createMenuTitle('MODO DE VISIÓN');
+			title.scale.set(0.10, 0.10, 0.10);
 			title.position.set(0, 0.34, 0.002);
 			group.add(title);
 
@@ -87900,6 +87900,63 @@ ENDSEC
 				const startY = H / 2 - ((lines.length - 1) * lineH) / 2;
 				lines.forEach((line, i) => ctx.fillText(line, W / 2, startY + i * lineH));
 			}
+		}
+
+		// Cartel de título de un menú: texto blanco liso en Arial negrita (sin caja
+		// ni contorno), igual al estilo del texto de los botones. Es un plane mesh
+		// ESTÁTICO (no billboard: no gira hacia la cámara, queda fijo en el panel).
+		// Mantiene la convención de escala anterior (geometría a canvasW*0.01) para
+		// que los title.scale.set(...) ya afinados en cada menú sigan siendo válidos.
+		// El objeto devuelto expone setText(nuevoTexto) para títulos dinámicos.
+		// opts.fontSize permite agrandar el texto (por defecto 40, > 34 del botón).
+		_createMenuTitle(text, opts){
+			opts = opts || {};
+			const fontSize = opts.fontSize || 40;
+			const margin = 5;
+
+			const material = new MeshBasicMaterial({
+				transparent: true, depthTest: false, depthWrite: false });
+			const mesh = new Mesh(new PlaneGeometry(1, 1), material);
+			mesh.renderOrder = 999;
+
+			const render = (str) => {
+				const font = 'bold ' + fontSize + 'px Arial, sans-serif';
+
+				// medir el texto para dimensionar el canvas
+				const measureCtx = document.createElement('canvas').getContext('2d');
+				measureCtx.font = font;
+				const textWidth = measureCtx.measureText(str).width;
+
+				const canvas = document.createElement('canvas');
+				canvas.width = Math.ceil(textWidth + 2 * margin);
+				canvas.height = Math.ceil(fontSize * 1.4 + 2 * margin);
+
+				const ctx = canvas.getContext('2d');
+				ctx.clearRect(0, 0, canvas.width, canvas.height); // fondo transparente
+				ctx.font = font;
+				ctx.fillStyle = '#ffffff';
+				ctx.textAlign = 'center';
+				ctx.textBaseline = 'middle';
+				ctx.fillText(str, canvas.width / 2, canvas.height / 2);
+
+				const texture = new Texture(canvas);
+				texture.minFilter = LinearFilter;
+				texture.magFilter = LinearFilter;
+				texture.needsUpdate = true;
+
+				if(material.map) material.map.dispose();
+				material.map = texture;
+				material.needsUpdate = true;
+
+				mesh.geometry.dispose();
+				mesh.geometry = new PlaneGeometry(canvas.width * 0.01, canvas.height * 0.01);
+			};
+			render(text);
+
+			const obj = new Object3D();
+			obj.add(mesh);
+			obj.setText = (newText) => render(newText);
+			return obj;
 		}
 
 
@@ -88180,10 +88237,11 @@ ENDSEC
 			const bgMat = new MeshBasicMaterial({
 				color: 0x0d1b2e, transparent: true, opacity: 0.88, side: DoubleSide,
 			});
-			const bg = new Mesh(new PlaneGeometry(0.80, 1.30), bgMat);
+			const bg = new Mesh(new PlaneGeometry(0.80, 1.04), bgMat);
+			bg.position.set(0, 0.13, 0);
 			group.add(bg);
 
-			const title = new Potree.TextSprite('APARIENCIA');
+			const title = this._createMenuTitle('APARIENCIA');
 			title.scale.set(0.09, 0.09, 0.09);
 			title.position.set(0, 0.60, 0.002);
 			group.add(title);
@@ -88222,24 +88280,6 @@ ENDSEC
 			group.add(radioFondo.group);
 			interactives.push(...radioFondo.interactives);
 
-			// Sección: Calidad Splat
-			const qualityLabel = new Potree.TextSprite('CALIDAD SPLAT');
-			qualityLabel.scale.set(0.07, 0.07, 0.07);
-			qualityLabel.position.set(0, -0.01, 0.002);
-			group.add(qualityLabel);
-
-			const radioQuality = this._createRadioGroupWidget({
-				options: [
-					{ label: 'Standard',     value: 'standard' },
-					{ label: 'High Quality', value: 'hq'       },
-				],
-				getValue: () => this.viewer.useHQ ? 'hq' : 'standard',
-				setValue: (v) => { this.viewer.useHQ = (v === 'hq'); },
-			});
-			radioQuality.group.position.set(0, -0.11, 0.002);
-			group.add(radioQuality.group);
-			interactives.push(...radioQuality.interactives);
-
 			// Slider: Tamaño de punto (material.size de las nubes). 0 = diminuto: el shader lo
 			// limita a minSize (~2px), igual que en los modos de colocación de medidas.
 			const sliderPointSize = this._createSliderWidget({
@@ -88249,7 +88289,7 @@ ENDSEC
 				setValue: (v) => { for(const pc of this.viewer.scene.pointclouds){ if(pc && pc.material) pc.material.size = v; } },
 				valueFormat: (v) => v.toFixed(2),
 			});
-			sliderPointSize.group.position.set(0, -0.27, 0.002);
+			sliderPointSize.group.position.set(0, -0.01, 0.002);
 			group.add(sliderPointSize.group);
 			interactives.push(...sliderPointSize.interactives);
 
@@ -88259,13 +88299,13 @@ ENDSEC
 				getValue: () => this.viewer.getShowBoundingBox(),
 				setValue: (v) => this.viewer.setShowBoundingBox(v),
 			});
-			toggleBox.group.position.set(0, -0.35, 0.002);
+			toggleBox.group.position.set(0, -0.09, 0.002);
 			group.add(toggleBox.group);
 			interactives.push(...toggleBox.interactives);
 
 			// Botón Volver
 			const btnBack = this._createMenuButton('← Volver', 'BACK_TO_MAIN');
-			btnBack.position.set(0, -0.49, 0.002);
+			btnBack.position.set(0, -0.23, 0.002);
 			group.add(btnBack);
 			interactives.push(btnBack);
 
@@ -88300,7 +88340,7 @@ ENDSEC
 			const bg = new Mesh(new PlaneGeometry(0.64, 0.90), bgMat);
 			group.add(bg);
 
-			const title = new Potree.TextSprite('MEDIDAS');
+			const title = this._createMenuTitle('MEDIDAS');
 			title.scale.set(0.07, 0.07, 0.07);
 			title.position.set(0, 0.35, 0.002);
 			group.add(title);
@@ -88341,7 +88381,7 @@ ENDSEC
 			const bg = new Mesh(new PlaneGeometry(0.70, 1.04), bgMat);
 			group.add(bg);
 
-			const title = new Potree.TextSprite('RECORTADO DE ZONAS');
+			const title = this._createMenuTitle('RECORTADO DE ZONAS');
 			title.scale.set(0.055, 0.055, 0.055);
 			title.position.set(0, 0.42, 0.002);
 			group.add(title);
@@ -88386,7 +88426,7 @@ ENDSEC
 			const bg = new Mesh(new PlaneGeometry(0.64, 0.62), bgMat);
 			group.add(bg);
 
-			const title = new Potree.TextSprite('CLIP TASK');
+			const title = this._createMenuTitle('CLIP TASK');
 			title.scale.set(0.07, 0.07, 0.07);
 			title.position.set(0, 0.24, 0.002);
 			group.add(title);
@@ -88425,7 +88465,7 @@ ENDSEC
 			const bg = new Mesh(new PlaneGeometry(0.70, 0.66), bgMat);
 			group.add(bg);
 
-			const title = new Potree.TextSprite('FORMA DE ZONA');
+			const title = this._createMenuTitle('FORMA DE ZONA');
 			title.scale.set(0.07, 0.07, 0.07);
 			title.position.set(0, 0.24, 0.002);
 			group.add(title);
@@ -88464,7 +88504,7 @@ ENDSEC
 			const bg = new Mesh(new PlaneGeometry(0.80, 0.84), bgMat);
 			group.add(bg);
 
-			const title = new Potree.TextSprite('RECLASIFICAR');
+			const title = this._createMenuTitle('RECLASIFICAR');
 			title.scale.set(0.08, 0.08, 0.08);
 			title.position.set(0, 0.32, 0.002);
 			group.add(title);
@@ -88510,9 +88550,9 @@ ENDSEC
 			const bg = new Mesh(new PlaneGeometry(0.85, 2.00), bgMat);
 			group.add(bg);
 
-			const title = new Potree.TextSprite('ATRIBUTO');
+			const title = this._createMenuTitle('ATRIBUTO');
 			title.scale.set(0.08, 0.08, 0.08);
-			title.position.set(0, 0.78, 0.002);
+			title.position.set(0, 0.88, 0.002);
 			group.add(title);
 
 			const radio = this._createRadioGroupWidget({
@@ -88559,7 +88599,7 @@ ENDSEC
 			bg.position.set(0, -0.13, 0);
 			group.add(bg);
 
-			const title = new Potree.TextSprite('NUBE DE PUNTOS');
+			const title = this._createMenuTitle('NUBE DE PUNTOS');
 			title.scale.set(0.07, 0.07, 0.07);
 			title.position.set(0, 0.32, 0.002);
 			group.add(title);
@@ -88609,7 +88649,7 @@ ENDSEC
 			const bg = new Mesh(new PlaneGeometry(1.20, 1.45), bgMat);
 			group.add(bg);
 
-			const title = new Potree.TextSprite('EDITAR CLASIFICACIÓN');
+			const title = this._createMenuTitle('EDITAR CLASIFICACIÓN');
 			title.scale.set(0.10, 0.10, 0.10);
 			title.position.set(0, 0.62, 0.002);
 			group.add(title);
@@ -90277,7 +90317,7 @@ ENDSEC
 			for(const entry of this.clipBoxes){
 				const v = entry.volume;
 				const sc = v.scale;
-				const r = Math.max(Math.max(sc.x, sc.y, sc.z) * 0.06, 1e-3);
+				const r = Math.max(Math.max(sc.x, sc.y, sc.z) * 0.015, 1e-3);
 				for(const h of entry.handles){
 					if(h.userData.role === 'center'){
 						h.position.copy(v.position);
@@ -90299,7 +90339,7 @@ ENDSEC
 				const d = new Vector3();
 				for(const entry of this.clipBoxes){
 					for(const h of entry.handles){
-						const thresh = h.scale.x * 1.8;
+						const thresh = h.scale.x * 7.2;   // bola 4× más pequeña, área de apuntado igual que antes
 						d.copy(h.position).sub(ray.origin);
 						const t = d.dot(ray.direction);
 						if(t <= 0) continue;

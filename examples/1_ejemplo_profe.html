@@ -562,8 +562,8 @@
         viewer.scene.view.lookAt(lookAtPos);
         viewer.setMoveSpeed(10);
       }
-      // Cartel de sendero (exclusivo de Paseo Garañón). Visible en ambos modos: el grupo
-      // replica pointcloud.scale, así que escala x10 en Paseo igual que el terreno.
+      // Carteles de sendero (exclusivos de Paseo Garañón). El grupo replica pointcloud.scale
+      // (x10 en Paseo, x1 en aéreo). Cartel 1 visible en ambos modos; cartel 2 solo en Paseo.
       window.trailSignGroup = buildTrailSign(pointcloud);
       syncVRToScene();
     });
@@ -755,36 +755,85 @@
     window.anomalyVolumes = [];
   }
 
-  // ===== Cartel de sendero (solo nube "Paseo Garañón") =====
-  // Construye un THREE.Group con un cartel de sendero (poste de madera + tabla con forma de
-  // flecha y el texto "SENDERO") en una coordenada UTM fija. Reutiliza EXACTAMENTE el patrón
-  // de buildAnomalyCylinders: NO se cuelga del pointcloud (en VR las mallas hijas de la nube
-  // son invisibles), sino que se añade a viewer.scene.scene replicando el transform de la nube
+  // ===== Carteles de sendero (solo nube "Paseo Garañón") =====
+  // Construye un THREE.Group con DOS carteles de sendero (poste de madera + tabla con forma de
+  // flecha y el texto "SENDERO") en coordenadas fijas. Reutiliza EXACTAMENTE el patrón de
+  // buildAnomalyCylinders: NO se cuelga del pointcloud (en VR las mallas hijas de la nube son
+  // invisibles), sino que se añade a viewer.scene.scene replicando el transform de la nube
   // (group.position = offset UTM, group.scale = escala del modo). Así se ve en escritorio y VR
-  // y escala igual que el terreno en ambos modos (x1 aéreo, x10 Paseo).
+  // y escala igual que el terreno en ambos modos (x1 aéreo, x10 Paseo). El primer cartel se ve
+  // en ambos modos; el segundo desaparece en modo aéreo. Cada cartel lo construye buildOneSign.
   function buildTrailSign(pointcloud) {
     // Limpiar un cartel anterior si existía (cambios de nube/modo)
     if (window.trailSignGroup && window.trailSignGroup.parent) {
       window.trailSignGroup.parent.remove(window.trailSignGroup);
     }
 
-    // --- Posición y orientación (constantes fáciles de afinar a ojo) ---
+    // --- Posición y orientación base (constantes fáciles de afinar a ojo) ---
     // OJO: estas coordenadas están en el espacio "mundo de modo Paseo" (la nube escalada x10),
     // que es donde el usuario las leyó. NO son UTM reales (el offset de esta nube es
-    // 440797,3092075,1572 y su bbox real solo llega a 443992,3093874,1946). Para colocar el
-    // cartel en coords locales de la nube hay que deshacer ese x10: local = (coord - offset)/10.
-    const WALK_SCALE = 10;
-    const SIGN_WORLD = new THREE.Vector3(454568.219, 3109861.783, 2555.618); // base del poste (mundo Paseo)
-    // Rumbo del sendero: de la entrada de Paseo hacia el cartel (misma escala, sirve el rumbo).
+    // 440797,3092075,1572 y su bbox real solo llega a 443992,3093874,1946). Para colocar cada
+    // cartel en coords locales de la nube hay que deshacer ese x10: local = (coord - offset)/10
+    // (lo hace buildOneSign).
+    const SIGN_WORLD = new THREE.Vector3(454568.219, 3109861.783, 2555.618); // base del poste 1 (mundo Paseo)
+    // Rumbo del sendero: de la entrada de Paseo hacia el cartel original (misma escala, sirve el rumbo).
     const ENTRY_WORLD = new THREE.Vector2(454491.539, 3109992.743);
     const dirPath = new THREE.Vector2(SIGN_WORLD.x - ENTRY_WORLD.x, SIGN_WORLD.y - ENTRY_WORLD.y);
     // "Derecha del camino" = rumbo girado -90° (sentido horario): (x,y) -> (y,-x).
     const right = new THREE.Vector2(dirPath.y, -dirPath.x);
-    // Yaw para que el eje +X local del cartel (la flecha) apunte a la derecha del camino.
+    // Yaw base para que el eje +X local del cartel (la flecha) apunte a la derecha del camino.
     const SIGN_YAW = Math.atan2(right.y, right.x);
 
-    // ¿Modo Paseo (escala x10) o aéreo (x1)? Se usa para el tamaño y para la flecha del texto.
+    // Giro extra de cada cartel sobre el rumbo base. Positivo = a la IZQUIERDA (antihorario en
+    // vista cenital). Si en pantalla girasen al revés, negar estos valores.
+    const DEG = Math.PI / 180;
+    const SIGN1_LEFT_DEG = 35;   // cartel original, mejor orientado hacia el sendero
+    const SIGN2_LEFT_DEG = 120;  // segundo cartel: apunta mucho más a la izquierda (ajustable a ojo)
+
+    // ¿Modo Paseo (escala x10) o aéreo (x1)? Controla tamaño y si la textura lleva flecha.
     const isWalker = pointcloud.scale.x >= 5;
+
+    // Grupo contenedor: replica el transform de la nube (offset + escala del modo actual).
+    const group = new THREE.Group();
+    group.name = 'trail-sign';
+
+    // Cartel 1: ubicación original, girado a la izquierda (SIGN1_LEFT_DEG), visible en AMBOS modos, sin flecha.
+    group.add(buildOneSign(pointcloud, isWalker, {
+      worldPos: SIGN_WORLD,
+      yaw: SIGN_YAW + SIGN1_LEFT_DEG * DEG,
+      hideInAerial: false,
+      noArrow: true,
+    }));
+
+    // Cartel 2: ubicación nueva, aún más a la izquierda, OCULTO en modo aéreo y SIN flecha.
+    group.add(buildOneSign(pointcloud, isWalker, {
+      worldPos: new THREE.Vector3(454173.669, 3107680.793, 2423.058),
+      yaw: SIGN_YAW + SIGN2_LEFT_DEG * DEG,
+      hideInAerial: true,
+      noArrow: true,
+    }));
+
+    group.position.copy(pointcloud.position);
+    group.scale.copy(pointcloud.scale);
+    group.updateMatrix();
+    group.updateMatrixWorld(true);
+
+    group.visible = true; // el contenedor siempre se muestra; cada cartel decide su visibilidad
+    viewer.scene.scene.add(group); // world scene -> escritorio y VR
+
+    console.log('[Cartel] offset(pc.pos)=(' + pointcloud.position.x.toFixed(1) + ',' + pointcloud.position.y.toFixed(1) + ',' + pointcloud.position.z.toFixed(1) + ')' +
+      ' escala=' + pointcloud.scale.x + ' carteles=' + group.children.length);
+    return group;
+  }
+
+  // Construye UN cartel de sendero (poste de madera + tabla con flecha y el texto "SENDERO") y
+  // devuelve su sub-grupo, ya orientado (yaw) y colocado en coords locales de la nube. NO lo añade
+  // a la escena: de eso se encarga buildTrailSign metiéndolo en el grupo contenedor. opts:
+  //   worldPos     THREE.Vector3 con la base del poste en coords de mundo Paseo (x10)
+  //   yaw          rotación final alrededor de Z (rad)
+  //   hideInAerial si true, el cartel solo es visible en modo Paseo (desaparece en aéreo)
+  function buildOneSign(pointcloud, isWalker, opts) {
+    const WALK_SCALE = 10;
 
     // --- Materiales de madera ---
     // OPACO con depthTest/depthWrite activos: así en VR (donde scene.scene se dibuja ANTES que
@@ -813,10 +862,11 @@
     ctx.fillStyle = '#F7E8C8';
     ctx.font = 'bold 150px Arial';
     ctx.textBaseline = 'middle';
-    if (isWalker) {
+    // Flecha solo en modo Paseo y si el cartel no la desactiva (opts.noArrow). Si no, texto centrado.
+    if (isWalker && !opts.noArrow) {
       ctx.textAlign = 'left';
       ctx.fillText('SENDERO', 60, cv.height / 2);
-      // flecha apuntando a la derecha (+X) -- solo en modo Paseo
+      // flecha apuntando a la derecha (+X)
       ctx.beginPath();
       ctx.moveTo(760, cv.height / 2 - 55);
       ctx.lineTo(870, cv.height / 2 - 55);
@@ -847,11 +897,32 @@
     post.position.set(0, 0, 1.2); // base en z=0, top en z=2.4
     sign.add(post);
 
-    // Tabla: caja 1.4 (largo X) x 0.05 (grosor Y) x 0.45 (alto Z). Caras grandes ±Y -> texto.
+    // Tabla: cuerpo de madera (caja 1.4 largo X x 0.05 grosor Y x 0.45 alto Z). El TEXTO no se pinta
+    // en las caras del box: por sus UV, una de las caras grandes (±Y) sale boca abajo. En su lugar el
+    // texto va en DOS planos, uno por cara, así se lee derecho por delante y por detrás.
     const plankGeom = new THREE.BoxGeometry(1.4, 0.05, 0.45);
-    const plank = new THREE.Mesh(plankGeom, plankMat);
+    const plank = new THREE.Mesh(plankGeom, woodMat);
     plank.position.set(0.7, 0, 2.1); // arranca en el poste (x=0), apunta a +X, cerca del top
     sign.add(plank);
+
+    // Texto por las dos caras (±Y). Un PlaneGeometry con la CanvasTexture, visto desde su normal +Z,
+    // muestra el canvas tal cual (derecho). qBack: girar +90° en X lleva la normal a -Y con "arriba"
+    // hacia +Z (se lee derecho desde detrás). qFront: la trasera girada 180° sobre la vertical Z, así
+    // mira a +Y y SIGUE derecha (girar sobre Z nunca deja el texto boca abajo). Cada plano va un poco
+    // por fuera de su cara. (La flecha apunta a la punta de madera por la cara -Y; por la +Y queda a
+    // la inversa, pero el texto se lee bien por ambas.)
+    const qBack = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
+    const qFront = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI).multiply(qBack);
+
+    const plankFront = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 0.45), plankMat);
+    plankFront.quaternion.copy(qFront);
+    plankFront.position.set(0.7, 0.027, 2.1);
+    sign.add(plankFront);
+
+    const plankBack = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 0.45), plankMat);
+    plankBack.quaternion.copy(qBack);
+    plankBack.position.set(0.7, -0.027, 2.1);
+    sign.add(plankBack);
 
     // Punta de flecha (triángulo extruido) en el extremo +X de la tabla.
     const tipShape = new THREE.Shape();
@@ -864,10 +935,10 @@
     sign.add(tip);
 
     // Orientar el cartel (yaw alrededor de Z) y colocarlo en coords locales de la nube.
-    // local = (coordMundoPaseo - offset) / 10. Así el grupo (que replica pos+escala de la nube)
-    // lo deja en el sitio correcto en AMBOS modos: aéreo (x1) y Paseo (x10).
-    sign.rotation.z = SIGN_YAW;
-    sign.position.copy(SIGN_WORLD.clone().sub(pointcloud.position).divideScalar(WALK_SCALE));
+    // local = (coordMundoPaseo - offset) / 10. Así el grupo contenedor (que replica pos+escala de
+    // la nube) lo deja en el sitio correcto en AMBOS modos: aéreo (x1) y Paseo (x10).
+    sign.rotation.z = opts.yaw;
+    sign.position.copy(opts.worldPos.clone().sub(pointcloud.position).divideScalar(WALK_SCALE));
 
     // El cartel se construye a tamaño real (~2.4 m). En Paseo el grupo lo escala x10 y queda a
     // tamaño humano (correcto). En aéreo (x1) 2.4 m sería un punto invisible desde km de
@@ -877,26 +948,10 @@
 
     sign.traverse(o => { if (o.isMesh) o.renderOrder = 9999; });
 
-    // Grupo contenedor: replica el transform de la nube (offset + escala del modo actual).
-    const group = new THREE.Group();
-    group.name = 'trail-sign';
-    group.add(sign);
-    group.position.copy(pointcloud.position);
-    group.scale.copy(pointcloud.scale);
-    group.updateMatrix();
-    group.updateMatrixWorld(true);
+    // Visibilidad: por defecto siempre visible; si hideInAerial, solo en modo Paseo (oculto en aéreo).
+    sign.visible = opts.hideInAerial ? isWalker : true;
 
-    group.visible = true; // el cartel siempre se muestra en esta nube
-    viewer.scene.scene.add(group); // world scene -> escritorio y VR
-
-    // Diagnóstico: posición del poste en coords de mundo (para comprobar que cae en la nube)
-    const worldPos = new THREE.Vector3();
-    post.getWorldPosition(worldPos);
-    console.log('[Cartel] offset(pc.pos)=(' + pointcloud.position.x.toFixed(1) + ',' + pointcloud.position.y.toFixed(1) + ',' + pointcloud.position.z.toFixed(1) + ')' +
-      ' escala=' + pointcloud.scale.x +
-      ' signLocal=(' + sign.position.x.toFixed(1) + ',' + sign.position.y.toFixed(1) + ',' + sign.position.z.toFixed(1) + ')' +
-      ' posteWorld=(' + worldPos.x.toFixed(1) + ',' + worldPos.y.toFixed(1) + ',' + worldPos.z.toFixed(1) + ')');
-    return group;
+    return sign;
   }
 
 </script>
