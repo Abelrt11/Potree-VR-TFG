@@ -184,21 +184,28 @@
     loadCloudMode(viewmode);
   });
 
-  // Activa/desactiva la visión de anomalías (cilindros rojos) desde el menú VR / squeeze
+  // Activa/desactiva la visión de anomalías desde el menú VR / squeeze. Cada anomalía es un
+  // volumen de recorte cilíndrico: 'visible' muestra el cilindro rojo; 'clip' activa el
+  // resaltado (rojo) de los puntos de su interior vía el shader (clipTask=HIGHLIGHT).
   document.addEventListener('vr-anomalies-toggle', (e) => {
     window.anomaliesWanted = e.detail.active;
-    if (window.anomalyGroup) window.anomalyGroup.visible = e.detail.active;
-    console.log('[Anomalías] toggle=' + e.detail.active +
-      ' grupo=' + (window.anomalyGroup ? ('OK(' + window.anomalyGroup.children.length + ' cil)') : 'NULL'));
+    const vols = window.anomalyVolumes || [];
+    for (const v of vols) { v.visible = e.detail.active; v.clip = e.detail.active; }
+    // Garantizar el modo de resaltado (por si se tocó el "Clip Task" en el menú de zonas).
+    if (e.detail.active) {
+      viewer.setClipTask(Potree.ClipTask.HIGHLIGHT);
+      viewer.setClipMethod(Potree.ClipMethod.INSIDE_ANY);
+    }
+    console.log('[Anomalías] toggle=' + e.detail.active + ' volúmenes=' + vols.length);
   });
 
-  // En escritorio con EDL, scene.scene se dibuja ANTES del pase EDL (que pinta un quad a
-  // pantalla completa encima y taparía los cilindros). Las medidas se ven porque se
-  // redibujan en el pase 'perspective_overlay'. Hacemos lo mismo con las anomalías.
+  // Cartel de sendero (scene.scene): en escritorio con EDL hay que redibujarlo en el overlay
+  // (tras clearDepth) o el quad EDL lo taparía. Los cilindros de anomalías ya NO van aquí:
+  // son volúmenes (viewer.volumeTool.scene), que se dibujan después de los puntos por sí solos.
   viewer.addEventListener('render.pass.perspective_overlay', () => {
-    const g = window.anomalyGroup;
-    if (g && g.visible) {
-      viewer.renderer.render(g, viewer.scene.getActiveCamera());
+    const s = window.trailSignGroup;
+    if (s && s.visible) {
+      viewer.renderer.render(s, viewer.scene.getActiveCamera());
     }
   });
 
@@ -221,11 +228,14 @@
     }
     viewer.scene.pointclouds.length = 0;
 
-    // Quitar los cilindros de anomalías al cambiar de nube
-    if (window.anomalyGroup && window.anomalyGroup.parent) {
-      window.anomalyGroup.parent.remove(window.anomalyGroup);
+    // Quitar los volúmenes de anomalía al cambiar de nube
+    removeAnomalyVolumes();
+
+    // Quitar el cartel de sendero al cambiar de nube (solo existe en Paseo Garañón)
+    if (window.trailSignGroup && window.trailSignGroup.parent) {
+      window.trailSignGroup.parent.remove(window.trailSignGroup);
     }
-    window.anomalyGroup = null;
+    window.trailSignGroup = null;
   }
 
   function syncVRToScene() {
@@ -552,6 +562,9 @@
         viewer.scene.view.lookAt(lookAtPos);
         viewer.setMoveSpeed(10);
       }
+      // Cartel de sendero (exclusivo de Paseo Garañón). Visible en ambos modos: el grupo
+      // replica pointcloud.scale, así que escala x10 en Paseo igual que el terreno.
+      window.trailSignGroup = buildTrailSign(pointcloud);
       syncVRToScene();
     });
   }
@@ -634,19 +647,16 @@
         viewer.setMoveSpeed(10);
       }
 
-      // Cilindros de anomalías (ocultos por defecto; se muestran con el menú VR / tecla 3)
+      // Volúmenes de anomalía (ocultos/sin clip por defecto; se activan con el menú VR / tecla 3)
       const nPts = (anomData && anomData.building && anomData.building.points)
         ? anomData.building.points.length : 0;
       console.log('[Anomalías] json=' + (anomData ? 'OK' : 'NULL') + ' puntos=' + nPts);
-      window.anomalyGroup = anomData ? buildAnomalyCylinders(pointcloud, anomData) : null;
-      if (window.anomalyGroup) {
-        window.anomalyGroup.visible = !!window.anomaliesWanted;
-        const c = window.anomalyGroup.children[0];
-        console.log('[Anomalías] cilindros=' + window.anomalyGroup.children.length +
-          ' offset=(' + pointcloud.position.x.toFixed(0) + ',' + pointcloud.position.y.toFixed(0) + ',' + pointcloud.position.z.toFixed(0) + ')' +
-          ' escala=' + pointcloud.scale.x +
-          (c ? ' cil0Local=(' + c.position.x.toFixed(1) + ',' + c.position.y.toFixed(1) + ',' + c.position.z.toFixed(1) + ')' : ''));
+      if (anomData) {
+        const vols = buildAnomalyCylinders(pointcloud, anomData);
+        console.log('[Anomalías] volúmenes=' + vols.length +
+          ' escala=' + pointcloud.scale.x + ' activo=' + !!window.anomaliesWanted);
       } else {
+        removeAnomalyVolumes();
         console.warn('[Anomalías] no se pudo cargar anomalías.json (revisa la URL del bucket)');
       }
 
@@ -654,36 +664,29 @@
     });
   }
 
-  // Construye un THREE.Group con un cilindro rojo translúcido por CADA punto de anomalía
-  // del anomalías.json (cada entrada de building.points). Así se ve toda la nube de puntos
-  // peligrosos resaltada, no solo el centro del grupo.
+  // Construye un VOLUMEN DE RECORTE (Potree.BoxVolume con forma 'cylinder') por cada grupo de
+  // anomalía, con un cilindro rojo translúcido como hijo visual. Reutiliza la infraestructura
+  // de "delimitar zonas":
+  //   1) PROFUNDIDAD CORRECTA: los volúmenes se dibujan en viewer.volumeTool.scene, que en VR
+  //      se renderiza DESPUÉS de los puntos (viewer.renderVR) y en escritorio en el pase
+  //      'render.pass.scene'. Antes el cilindro colgaba de viewer.scene.scene, que en VR se
+  //      dibuja ANTES de los puntos -> quedaba detrás. Como volumen ya no.
+  //   2) RESALTAR EL INTERIOR: clip=true + clipTask=HIGHLIGHT (por defecto en el viewer) hace
+  //      que el shader sume rojo a los puntos dentro del cilindro (igual que las zonas).
   //
-  // IMPORTANTE: NO se cuelga del pointcloud. En VR las nubes se dibujan con un renderer
-  // de puntos especializado (pRenderer.render(scenePointCloud, ...)) que NO dibuja mallas
-  // hijas; por eso un cilindro hijo del pointcloud es invisible en el casco. En su lugar
-  // se añade a viewer.scene.scene (la "world scene"), que SÍ se renderiza tanto en
-  // escritorio (EDLRenderer) como en VR (viewer.renderVR).
-  //
-  // Para encajar con la nube, el GRUPO replica el transform del pointcloud:
-  //   group.position = pointcloud.position (= offset UTM)
-  //   group.scale    = pointcloud.scale    (x1 en Aéreo, x10 en Paseo)
-  // y cada cilindro se coloca en coords locales (UTM - offset). Así la posición y el
-  // tamaño escalan igual que la nube en ambos modos.
+  // El volumen vive en COORDENADAS DE MUNDO (igual que las zonas que coloca el usuario):
+  //   centroMundo = offset + escala*(UTM_anomalía - offset)
+  //   escala del volumen = (2*radio*S, 2*radio*S, altura*S)   [cilindro unidad: radio 0.5, alto 1, eje Z]
+  // Así coincide con los puntos renderizados tanto en Aéreo (S=1) como en Paseo (S=10).
   function buildAnomalyCylinders(pointcloud, data) {
-    // Limpiar un grupo anterior si existía (cambios de nube/modo)
-    if (window.anomalyGroup && window.anomalyGroup.parent) {
-      window.anomalyGroup.parent.remove(window.anomalyGroup);
-    }
-
-    const group = new THREE.Group();
-    group.name = 'anomaly-cylinders';
+    // Quitar volúmenes de una carga anterior
+    removeAnomalyVolumes();
 
     const points = (data.building && data.building.points) ? data.building.points : [];
 
-    // Una anomalía = un grupo de puntos peligrosos (mismo groupId). Los puntos de un
-    // grupo están muy juntos (es un único árbol/zona), así que dibujamos UN cilindro por
-    // grupo que ENGLOBE todos sus puntos: radio = dispersión horizontal + margen,
-    // altura = rango vertical + margen. Así cada anomalía es una baliza, no 67 solapadas.
+    // Una anomalía = un grupo de puntos peligrosos (mismo groupId). Dibujamos UN cilindro por
+    // grupo que ENGLOBE todos sus puntos: radio = dispersión horizontal + margen, altura = rango
+    // vertical + margen.
     const byGroup = new Map();
     for (const p of points) {
       const gid = (p.groupId !== undefined) ? p.groupId : 0;
@@ -691,13 +694,14 @@
       byGroup.get(gid).push(p);
     }
 
-    const mat = new THREE.MeshBasicMaterial({
-      color: 0xff0000, transparent: true, opacity: 0.35,
-      side: THREE.DoubleSide, depthWrite: false, depthTest: false,
-    });
+    const S = pointcloud.scale.x;       // escala del modo (1 aéreo, 10 paseo)
+    const pcPos = pointcloud.position;  // offset de la nube
     const MARGIN_XY = 1.5;   // margen horizontal (m) sobre la dispersión del grupo
     const MIN_RADIUS = 1.5;  // radio mínimo aunque el grupo sea diminuto
     const MARGIN_Z = 6.0;    // sobresale por arriba y por abajo (m)
+
+    const wanted = !!window.anomaliesWanted;
+    const volumes = [];
 
     for (const [, pts] of byGroup) {
       let cx = 0, cy = 0, minZ = Infinity, maxZ = -Infinity;
@@ -705,28 +709,193 @@
       cx /= pts.length; cy /= pts.length;
       const cz = (minZ + maxZ) / 2;
 
-      // radio = distancia horizontal máxima al centro + margen
       let maxR = 0;
       for (const p of pts) maxR = Math.max(maxR, Math.hypot(p.x - cx, p.y - cy));
       const radius = Math.max(MIN_RADIUS, maxR + MARGIN_XY);
       const height = (maxZ - minZ) + 2 * MARGIN_Z;
 
-      const geom = new THREE.CylinderGeometry(radius, radius, height, 24, 1, true); // sin tapas: interior visible
+      // UTM -> mundo (igual que el spawn de la cámara: pcPos + S*(C - pcPos))
+      const worldCenter = new THREE.Vector3(cx, cy, cz).sub(pcPos).multiplyScalar(S).add(pcPos);
+
+      const v = new Potree.BoxVolume();
+      v.name = 'Anomalía';
+      v.clip = wanted;                       // afecta al shader solo cuando "Ver Anomalías" está activo
+      v.userData.clipShape = 'cylinder';     // leído por viewer.js -> test cilíndrico (eje Z) en el shader
+      v.position.copy(worldCenter);
+      v.scale.set(2 * radius * S, 2 * radius * S, height * S); // diámetro,diámetro,altura en mundo
+      if (v.frame) v.frame.visible = false;  // ocultar el marco de caja por defecto
+
+      // Cilindro rojo translúcido (hijo del volumen -> hereda posición/escala).
+      // depthTest:true (se ocluye con lo que tenga delante) + depthWrite:false (deja ver los
+      // puntos resaltados del interior). Cilindro unidad: radio 0.5, alto 1, eje Y -> rotamos a Z.
+      const geom = new THREE.CylinderGeometry(0.5, 0.5, 1, 24, 1, true);
+      const mat = new THREE.MeshBasicMaterial({
+        color: 0xff0000, transparent: true, opacity: 0.35,
+        side: THREE.DoubleSide, depthWrite: false, depthTest: true,
+      });
       const cyl = new THREE.Mesh(geom, mat);
-      cyl.renderOrder = 9999;
-      cyl.rotation.x = Math.PI / 2; // eje del cilindro Y -> Z (vertical, Z es arriba)
-      cyl.position.set(cx, cy, cz).sub(pointcloud.position); // UTM -> coords locales de la nube
-      group.add(cyl);
+      cyl.rotation.x = Math.PI / 2;
+      v.add(cyl);
+
+      v.visible = wanted;
+      viewer.scene.addVolume(v);
+      volumes.push(v);
     }
 
-    // Replicar el transform de la nube (offset + escala del modo actual)
+    window.anomalyVolumes = volumes;
+    return volumes;
+  }
+
+  // Quita los volúmenes de anomalía del viewer (al cambiar de nube/modo)
+  function removeAnomalyVolumes() {
+    const vols = window.anomalyVolumes || [];
+    for (const v of vols) {
+      try { viewer.scene.removeVolume(v); } catch (e) {}
+    }
+    window.anomalyVolumes = [];
+  }
+
+  // ===== Cartel de sendero (solo nube "Paseo Garañón") =====
+  // Construye un THREE.Group con un cartel de sendero (poste de madera + tabla con forma de
+  // flecha y el texto "SENDERO") en una coordenada UTM fija. Reutiliza EXACTAMENTE el patrón
+  // de buildAnomalyCylinders: NO se cuelga del pointcloud (en VR las mallas hijas de la nube
+  // son invisibles), sino que se añade a viewer.scene.scene replicando el transform de la nube
+  // (group.position = offset UTM, group.scale = escala del modo). Así se ve en escritorio y VR
+  // y escala igual que el terreno en ambos modos (x1 aéreo, x10 Paseo).
+  function buildTrailSign(pointcloud) {
+    // Limpiar un cartel anterior si existía (cambios de nube/modo)
+    if (window.trailSignGroup && window.trailSignGroup.parent) {
+      window.trailSignGroup.parent.remove(window.trailSignGroup);
+    }
+
+    // --- Posición y orientación (constantes fáciles de afinar a ojo) ---
+    // OJO: estas coordenadas están en el espacio "mundo de modo Paseo" (la nube escalada x10),
+    // que es donde el usuario las leyó. NO son UTM reales (el offset de esta nube es
+    // 440797,3092075,1572 y su bbox real solo llega a 443992,3093874,1946). Para colocar el
+    // cartel en coords locales de la nube hay que deshacer ese x10: local = (coord - offset)/10.
+    const WALK_SCALE = 10;
+    const SIGN_WORLD = new THREE.Vector3(454568.219, 3109861.783, 2555.618); // base del poste (mundo Paseo)
+    // Rumbo del sendero: de la entrada de Paseo hacia el cartel (misma escala, sirve el rumbo).
+    const ENTRY_WORLD = new THREE.Vector2(454491.539, 3109992.743);
+    const dirPath = new THREE.Vector2(SIGN_WORLD.x - ENTRY_WORLD.x, SIGN_WORLD.y - ENTRY_WORLD.y);
+    // "Derecha del camino" = rumbo girado -90° (sentido horario): (x,y) -> (y,-x).
+    const right = new THREE.Vector2(dirPath.y, -dirPath.x);
+    // Yaw para que el eje +X local del cartel (la flecha) apunte a la derecha del camino.
+    const SIGN_YAW = Math.atan2(right.y, right.x);
+
+    // ¿Modo Paseo (escala x10) o aéreo (x1)? Se usa para el tamaño y para la flecha del texto.
+    const isWalker = pointcloud.scale.x >= 5;
+
+    // --- Materiales de madera ---
+    // OPACO con depthTest/depthWrite activos: así en VR (donde scene.scene se dibuja ANTES que
+    // los puntos y el pRenderer no limpia el depth) los puntos hacen depth-test contra el cartel
+    // y dejan de pintarse por encima. En escritorio el cartel se redibuja en el overlay, que
+    // ocurre tras clearDepth(), así que queda encima igualmente.
+    const WOOD = 0x8B5A2B;
+    const woodMat = new THREE.MeshBasicMaterial({
+      color: WOOD, side: THREE.DoubleSide,
+      transparent: false, depthTest: true, depthWrite: true,
+    });
+
+    // Textura de canvas para la tabla: fondo madera + "SENDERO" (+ flecha solo en modo Paseo;
+    // en aéreo el usuario la quiere sin la flecha blanca, solo el texto). Mismo truco que los
+    // botones del menú VR: canvas -> CanvasTexture -> map.
+    const cv = document.createElement('canvas');
+    cv.width = 1024; cv.height = 330;
+    const ctx = cv.getContext('2d');
+    ctx.fillStyle = '#8B5A2B'; ctx.fillRect(0, 0, cv.width, cv.height);
+    // vetas/sombreado simple
+    ctx.strokeStyle = 'rgba(60,30,10,0.35)'; ctx.lineWidth = 6;
+    for (let y = 40; y < cv.height; y += 70) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(cv.width, y); ctx.stroke(); }
+    ctx.strokeStyle = '#5a3a1c'; ctx.lineWidth = 18;
+    ctx.strokeRect(9, 9, cv.width - 18, cv.height - 18);
+    // texto (centrado si no hay flecha, alineado a la izquierda si la hay)
+    ctx.fillStyle = '#F7E8C8';
+    ctx.font = 'bold 150px Arial';
+    ctx.textBaseline = 'middle';
+    if (isWalker) {
+      ctx.textAlign = 'left';
+      ctx.fillText('SENDERO', 60, cv.height / 2);
+      // flecha apuntando a la derecha (+X) -- solo en modo Paseo
+      ctx.beginPath();
+      ctx.moveTo(760, cv.height / 2 - 55);
+      ctx.lineTo(870, cv.height / 2 - 55);
+      ctx.lineTo(870, cv.height / 2 - 100);
+      ctx.lineTo(970, cv.height / 2);
+      ctx.lineTo(870, cv.height / 2 + 100);
+      ctx.lineTo(870, cv.height / 2 + 55);
+      ctx.lineTo(760, cv.height / 2 + 55);
+      ctx.closePath(); ctx.fill();
+    } else {
+      ctx.textAlign = 'center';
+      ctx.fillText('SENDERO', cv.width / 2, cv.height / 2);
+    }
+    const tex = new THREE.CanvasTexture(cv);
+    if (THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
+    const plankMat = new THREE.MeshBasicMaterial({
+      map: tex, side: THREE.DoubleSide,
+      transparent: false, depthTest: true, depthWrite: true,
+    });
+
+    // --- Sub-grupo del cartel en marco canónico: Z arriba, +X = dirección de la flecha ---
+    const sign = new THREE.Group();
+
+    // Poste (cilindro vertical). El eje del cilindro es Y -> lo rotamos a Z (vertical).
+    const postGeom = new THREE.CylinderGeometry(0.06, 0.06, 2.4, 12);
+    const post = new THREE.Mesh(postGeom, woodMat);
+    post.rotation.x = Math.PI / 2;
+    post.position.set(0, 0, 1.2); // base en z=0, top en z=2.4
+    sign.add(post);
+
+    // Tabla: caja 1.4 (largo X) x 0.05 (grosor Y) x 0.45 (alto Z). Caras grandes ±Y -> texto.
+    const plankGeom = new THREE.BoxGeometry(1.4, 0.05, 0.45);
+    const plank = new THREE.Mesh(plankGeom, plankMat);
+    plank.position.set(0.7, 0, 2.1); // arranca en el poste (x=0), apunta a +X, cerca del top
+    sign.add(plank);
+
+    // Punta de flecha (triángulo extruido) en el extremo +X de la tabla.
+    const tipShape = new THREE.Shape();
+    tipShape.moveTo(0, -0.225); tipShape.lineTo(0, 0.225); tipShape.lineTo(0.30, 0); tipShape.lineTo(0, -0.225);
+    const tipGeom = new THREE.ExtrudeGeometry(tipShape, { depth: 0.05, bevelEnabled: false });
+    tipGeom.translate(0, 0, -0.025); // centrar el grosor
+    tipGeom.rotateX(Math.PI / 2);    // plano de la forma XY -> XZ del mundo; extrusión -> Y (grosor)
+    const tip = new THREE.Mesh(tipGeom, woodMat);
+    tip.position.set(1.4, 0, 2.1);
+    sign.add(tip);
+
+    // Orientar el cartel (yaw alrededor de Z) y colocarlo en coords locales de la nube.
+    // local = (coordMundoPaseo - offset) / 10. Así el grupo (que replica pos+escala de la nube)
+    // lo deja en el sitio correcto en AMBOS modos: aéreo (x1) y Paseo (x10).
+    sign.rotation.z = SIGN_YAW;
+    sign.position.copy(SIGN_WORLD.clone().sub(pointcloud.position).divideScalar(WALK_SCALE));
+
+    // El cartel se construye a tamaño real (~2.4 m). En Paseo el grupo lo escala x10 y queda a
+    // tamaño humano (correcto). En aéreo (x1) 2.4 m sería un punto invisible desde km de
+    // distancia, así que lo agrandamos para que se vea como baliza desde arriba.
+    const GOD_SIGN_SCALE = 25;
+    if (!isWalker) sign.scale.setScalar(GOD_SIGN_SCALE);
+
+    sign.traverse(o => { if (o.isMesh) o.renderOrder = 9999; });
+
+    // Grupo contenedor: replica el transform de la nube (offset + escala del modo actual).
+    const group = new THREE.Group();
+    group.name = 'trail-sign';
+    group.add(sign);
     group.position.copy(pointcloud.position);
     group.scale.copy(pointcloud.scale);
     group.updateMatrix();
     group.updateMatrixWorld(true);
 
-    group.visible = false;
-    viewer.scene.scene.add(group); // world scene -> se dibuja en escritorio y en VR
+    group.visible = true; // el cartel siempre se muestra en esta nube
+    viewer.scene.scene.add(group); // world scene -> escritorio y VR
+
+    // Diagnóstico: posición del poste en coords de mundo (para comprobar que cae en la nube)
+    const worldPos = new THREE.Vector3();
+    post.getWorldPosition(worldPos);
+    console.log('[Cartel] offset(pc.pos)=(' + pointcloud.position.x.toFixed(1) + ',' + pointcloud.position.y.toFixed(1) + ',' + pointcloud.position.z.toFixed(1) + ')' +
+      ' escala=' + pointcloud.scale.x +
+      ' signLocal=(' + sign.position.x.toFixed(1) + ',' + sign.position.y.toFixed(1) + ',' + sign.position.z.toFixed(1) + ')' +
+      ' posteWorld=(' + worldPos.x.toFixed(1) + ',' + worldPos.y.toFixed(1) + ',' + worldPos.z.toFixed(1) + ')');
     return group;
   }
 
