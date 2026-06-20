@@ -87813,7 +87813,7 @@ ENDSEC
 
 			// Título
 			const title = this._createMenuTitle('MODO DE VISIÓN');
-			title.scale.set(0.10, 0.10, 0.10);
+			title.scale.set(0.093, 0.093, 0.093);
 			title.position.set(0, 0.34, 0.002);
 			group.add(title);
 
@@ -88242,7 +88242,7 @@ ENDSEC
 			group.add(bg);
 
 			const title = this._createMenuTitle('APARIENCIA');
-			title.scale.set(0.09, 0.09, 0.09);
+			title.scale.set(0.093, 0.093, 0.093);
 			title.position.set(0, 0.60, 0.002);
 			group.add(title);
 
@@ -88341,7 +88341,7 @@ ENDSEC
 			group.add(bg);
 
 			const title = this._createMenuTitle('MEDIDAS');
-			title.scale.set(0.07, 0.07, 0.07);
+			title.scale.set(0.093, 0.093, 0.093);
 			title.position.set(0, 0.35, 0.002);
 			group.add(title);
 
@@ -88382,7 +88382,7 @@ ENDSEC
 			group.add(bg);
 
 			const title = this._createMenuTitle('RECORTADO DE ZONAS');
-			title.scale.set(0.055, 0.055, 0.055);
+			title.scale.set(0.093, 0.093, 0.093);
 			title.position.set(0, 0.42, 0.002);
 			group.add(title);
 
@@ -88427,7 +88427,7 @@ ENDSEC
 			group.add(bg);
 
 			const title = this._createMenuTitle('CLIP TASK');
-			title.scale.set(0.07, 0.07, 0.07);
+			title.scale.set(0.093, 0.093, 0.093);
 			title.position.set(0, 0.24, 0.002);
 			group.add(title);
 
@@ -88466,7 +88466,7 @@ ENDSEC
 			group.add(bg);
 
 			const title = this._createMenuTitle('FORMA DE ZONA');
-			title.scale.set(0.07, 0.07, 0.07);
+			title.scale.set(0.093, 0.093, 0.093);
 			title.position.set(0, 0.24, 0.002);
 			group.add(title);
 
@@ -88505,7 +88505,7 @@ ENDSEC
 			group.add(bg);
 
 			const title = this._createMenuTitle('RECLASIFICAR');
-			title.scale.set(0.08, 0.08, 0.08);
+			title.scale.set(0.093, 0.093, 0.093);
 			title.position.set(0, 0.32, 0.002);
 			group.add(title);
 
@@ -88551,7 +88551,7 @@ ENDSEC
 			group.add(bg);
 
 			const title = this._createMenuTitle('ATRIBUTO');
-			title.scale.set(0.08, 0.08, 0.08);
+			title.scale.set(0.093, 0.093, 0.093);
 			title.position.set(0, 0.88, 0.002);
 			group.add(title);
 
@@ -88600,7 +88600,7 @@ ENDSEC
 			group.add(bg);
 
 			const title = this._createMenuTitle('NUBE DE PUNTOS');
-			title.scale.set(0.07, 0.07, 0.07);
+			title.scale.set(0.093, 0.093, 0.093);
 			title.position.set(0, 0.32, 0.002);
 			group.add(title);
 
@@ -88650,13 +88650,13 @@ ENDSEC
 			group.add(bg);
 
 			const title = this._createMenuTitle('EDITAR CLASIFICACIÓN');
-			title.scale.set(0.10, 0.10, 0.10);
+			title.scale.set(0.093, 0.093, 0.093);
 			title.position.set(0, 0.62, 0.002);
 			group.add(title);
 			this.editClassTitle = title;
 
-			const hint = new Potree.TextSprite('Elige una clase, apunta y pulsa trigger');
-			hint.scale.set(0.06, 0.06, 0.06);
+			const hint = this._createMenuTitle('Elige una clase, apunta y pulsa trigger');
+			hint.scale.set(0.093, 0.093, 0.093);
 			hint.position.set(0, 0.53, 0.002);
 			group.add(hint);
 			this.editClassHint = hint;
