@@ -841,7 +841,7 @@ void doClipping(){
 
 	if(clipMethod == CLIPMETHOD_INSIDE_ANY){
 		if(insideAny && clipTask == CLIPTASK_HIGHLIGHT){
-			vColor.r += 0.5;
+			vColor = vec3(1.0, 0.0, 0.0);
 		}else if(!insideAny && clipTask == CLIPTASK_SHOW_INSIDE){
 			gl_Position = vec4(100.0, 100.0, 100.0, 1.0);
 		}else if(insideAny && clipTask == CLIPTASK_SHOW_OUTSIDE){
@@ -849,7 +849,7 @@ void doClipping(){
 		}
 	}else if(clipMethod == CLIPMETHOD_INSIDE_ALL){
 		if(insideAll && clipTask == CLIPTASK_HIGHLIGHT){
-			vColor.r += 0.5;
+			vColor = vec3(1.0, 0.0, 0.0);
 		}else if(!insideAll && clipTask == CLIPTASK_SHOW_INSIDE){
 			gl_Position = vec4(100.0, 100.0, 100.0, 1.0);
 		}else if(insideAll && clipTask == CLIPTASK_SHOW_OUTSIDE){

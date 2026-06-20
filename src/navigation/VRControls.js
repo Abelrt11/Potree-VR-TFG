@@ -340,6 +340,11 @@ export class VRControls extends EventDispatcher{
 		this._dragging = null;
 		this._menuRaycaster = new THREE.Raycaster();
 
+		// Estado de la entrada de ratón en escritorio (menú VR + modos de colocación).
+		this._pickRaycaster = new THREE.Raycaster();
+		this._desktopPointerNDC = new THREE.Vector2(0, 0);
+		this._desktopDown = null;
+
 		const controllerModelFactory = new XRControllerModelFactory();
 		// Prefer a local copy of the webxr-input-profiles assets to avoid
 		// missing-node warnings (and to prevent loading from the CDN).
@@ -868,13 +873,148 @@ export class VRControls extends EventDispatcher{
 		return { group, interactives: meshes, refreshAll };
 	}
 
+	// ¿Estamos en escritorio (sin sesión XR activa)? Las ramas específicas de desktop
+	// van guardadas por este helper para no alterar el comportamiento en VR.
+	_isDesktop(){
+		return !this.viewer.renderer.xr.isPresenting;
+	}
+
+	// Actualiza el estado de hover (resaltado) de los botones interactivos del menú a
+	// partir de los impactos del raycaster. Reutilizado por el bucle update() de VR y
+	// por la entrada de ratón en escritorio.
+	_applyMenuHover(hits, interactives){
+		for(const btn of interactives){
+			const isHovered = hits.length > 0 && hits[0].object === btn;
+			if(btn.userData.hovered !== isHovered){
+				btn.userData.hovered = isHovered;
+				if(btn.userData.redraw) btn.userData.redraw(isHovered);
+			}
+		}
+	}
+
 	toggleMenu(){
+		// En escritorio el menú nunca se construyó (initMenu sólo se dispara al conectar
+		// un mando), así que lo construimos de forma perezosa la primera vez y enlazamos
+		// la entrada de ratón.
+		if(this._isDesktop() && !this.mainMenu){
+			this.initMenu();
+			this._initDesktopInput();
+		}
 		if(!this.mainMenu) return;
 		if(this.activeMenu){
 			this._hideAllMenus();
+			if(this._isDesktop()) this._setDesktopMenuActive(false);
 		} else {
 			this._showMenu(this.mainMenu);
+			if(this._isDesktop()) this._setDesktopMenuActive(true);
 		}
+	}
+
+	// Congela/restaura la navegación de cámara mientras el menú está abierto en escritorio.
+	// Se quita/agrega el listener del InputHandler porque los controles no respetan el flag
+	// `enabled` en sus handlers de arrastre.
+	_setDesktopMenuActive(active){
+		if(active === !!this._desktopFrozen) return;
+		this._desktopFrozen = active;
+		const ih = this.viewer.inputHandler;
+		const controls = this.viewer.controls;
+		if(!ih || !controls) return;
+		if(active){
+			ih.removeInputListener(controls);
+		}else{
+			ih.addInputListener(controls);
+		}
+	}
+
+	// ¿Hay algún modo de colocación activo (recorte, polígono, reclasificación, medidas)?
+	_anyPlacementModeActive(){
+		return !!(this.clipMode || this.polygonMode || this.editClassMode || this.pointsMode || this.infoPointMode);
+	}
+
+	// Enlaza (una sola vez) los listeners de ratón que conducen el menú VR y los modos de
+	// colocación en escritorio. Modelo: la navegación de cámara sigue libre; un "tap" (clic sin
+	// arrastre) ejecuta la acción; el clic derecho (tap) termina/sale del modo (≈ squeeze).
+	_initDesktopInput(){
+		if(this._desktopInputBound) return;
+		this._desktopInputBound = true;
+		const dom = this.viewer.renderer.domElement;
+
+		const updateNDC = (ev) => {
+			const rect = dom.getBoundingClientRect();
+			this._desktopPointerNDC.set(
+				((ev.clientX - rect.left) / rect.width) * 2 - 1,
+				-((ev.clientY - rect.top) / rect.height) * 2 + 1,
+			);
+		};
+
+		const TAP_MAX_PX = 5;
+		const isTap = (ev) => {
+			if(!this._desktopDown) return false;
+			const dx = ev.clientX - this._desktopDown.x;
+			const dy = ev.clientY - this._desktopDown.y;
+			return Math.hypot(dx, dy) <= TAP_MAX_PX;
+		};
+
+		dom.addEventListener('mousemove', (ev) => {
+			if(!this._isDesktop()) return;
+			updateNDC(ev);
+			// Hover de botones del menú (cuando hay menú abierto).
+			if(this.activeMenu && this.activeMenu.visible){
+				const interactives = this.activeMenu.userData.interactives ?? [];
+				if(interactives.length === 0) return;
+				const cam = this.viewer.scene.getActiveCamera();
+				this._pickRaycaster.setFromCamera(this._desktopPointerNDC, cam);
+				const hits = this._pickRaycaster.intersectObjects(interactives);
+				this._applyMenuHover(hits, interactives);
+			}
+		});
+
+		dom.addEventListener('mousedown', (ev) => {
+			if(!this._isDesktop()) return;
+			this._desktopDown = { x: ev.clientX, y: ev.clientY, button: ev.button };
+		});
+
+		dom.addEventListener('mouseup', (ev) => {
+			if(!this._isDesktop()) return;
+			const tap = isTap(ev);
+			const button = ev.button;
+			this._desktopDown = null;
+			if(!tap) return;
+			updateNDC(ev);
+
+			// Clic derecho (tap) = squeeze: cierra el polígono o sale del modo activo.
+			if(button === 2){
+				if(this._anyPlacementModeActive()) this.onSqueezeStart(this.cPrimary);
+				return;
+			}
+			if(button !== 0) return;
+
+			// 1) Si hay menú abierto → despachar el botón bajo el cursor.
+			if(this.activeMenu && this.activeMenu.visible){
+				const interactives = this.activeMenu.userData.interactives ?? [];
+				const cam = this.viewer.scene.getActiveCamera();
+				this._pickRaycaster.setFromCamera(this._desktopPointerNDC, cam);
+				const hits = this._pickRaycaster.intersectObjects(interactives);
+				this._applyMenuHover(hits, interactives);
+				this.onTriggerStart(this.cPrimary);
+				this._dragging = null; // el arrastre de slider es sólo-VR; los +/− bastan en desktop
+				if(!this.activeMenu) this._setDesktopMenuActive(false);
+				return;
+			}
+
+			// 2) Si hay un modo de colocación activo → un tap = una acción (colocar / reclasificar
+			//    / añadir vértice). Se cierra de inmediato cualquier estado de arrastre/spray.
+			if(this._anyPlacementModeActive()){
+				this.onTriggerStart(this.cPrimary);
+				this.onTriggerEnd(this.cPrimary);
+			}
+		});
+
+		// Suprimir el menú contextual del navegador mientras hay un modo activo (el clic derecho
+		// se usa como "salir/terminar"); el pan con arrastre derecho sigue funcionando.
+		dom.addEventListener('contextmenu', (ev) => {
+			if(this._isDesktop() && this._anyPlacementModeActive()) ev.preventDefault();
+		});
 	}
 
 	_hideAllMenus(){
@@ -903,6 +1043,24 @@ export class VRControls extends EventDispatcher{
 
 	_positionMenuInFrontOfCamera(){
 		if(!this.activeMenu) return;
+
+		// En escritorio no hay cámara XR: usar la cámara activa de la escena. Además, en vez
+		// de lookAt (que deriva el "roll" del up del mundo y deja el panel girado/bocabajo
+		// según cómo se haya orientado la cámara), copiamos la orientación de la cámara para
+		// que el menú sea un billboard alineado a la pantalla: siempre recto frente al usuario.
+		if(this._isDesktop()){
+			const cam = this.viewer.scene.getActiveCamera();
+			const pos = new THREE.Vector3();
+			const quat = new THREE.Quaternion();
+			cam.getWorldPosition(pos);
+			cam.getWorldQuaternion(quat);
+			const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(quat);
+			const menuPos = pos.clone().addScaledVector(forward, 1.5);
+			this.activeMenu.position.copy(menuPos);
+			this.activeMenu.quaternion.copy(quat);
+			return;
+		}
+
 		const camVR = this.viewer.renderer.xr.getCamera(fakeCam);
 		const pos = new THREE.Vector3();
 		const dir = new THREE.Vector3();
@@ -2115,17 +2273,29 @@ export class VRControls extends EventDispatcher{
 		return camera;
 	}
 
-	_raycastPointClouds(controller){
+	// Rayo del puntero en espacio escena/mundo. En VR se deriva de la pose del mando
+	// (+ toScene); en escritorio, del ratón sobre la cámara activa (ya en mundo).
+	_pointerWorldRay(controller){
+		if(this._isDesktop()){
+			const cam = this.viewer.scene.getActiveCamera();
+			this._pickRaycaster.setFromCamera(this._desktopPointerNDC, cam);
+			return {
+				origin: this._pickRaycaster.ray.origin.clone(),
+				dir: this._pickRaycaster.ray.direction.clone().normalize(),
+			};
+		}
 		const originVR = new THREE.Vector3();
 		const quat = new THREE.Quaternion();
 		controller.getWorldPosition(originVR);
 		controller.getWorldQuaternion(quat);
-
 		const dirVR = new THREE.Vector3(0, 0, -1).applyQuaternion(quat);
-		const originWorld = this.toScene(originVR);
-		const dirWorld = this.toScene(originVR.clone().add(dirVR)).sub(originWorld).normalize();
+		const origin = this.toScene(originVR);
+		const dir = this.toScene(originVR.clone().add(dirVR)).sub(origin).normalize();
+		return { origin, dir };
+	}
 
-		console.log('[VRPTS] ray origin=' + originWorld.x.toFixed(0) + ',' + originWorld.y.toFixed(0) + ',' + originWorld.z.toFixed(0) + ' pcs=' + this.viewer.scene.pointclouds.length);
+	_raycastPointClouds(controller){
+		const { origin: originWorld, dir: dirWorld } = this._pointerWorldRay(controller);
 
 		const ray = new THREE.Ray(originWorld, dirWorld);
 		const invMat = new THREE.Matrix4();
@@ -2137,7 +2307,6 @@ export class VRControls extends EventDispatcher{
 
 		for(const pc of this.viewer.scene.pointclouds){
 			const nodes = pc.nodesOnRay(pc.visibleNodes, ray);
-			console.log('[VRPTS] nodesOnRay=' + nodes.length + ' visibleNodes=' + pc.visibleNodes.length);
 			for(const node of nodes){
 				if(!node.sceneNode) continue;
 				const posAttr = node.sceneNode.geometry && node.sceneNode.geometry.attributes && node.sceneNode.geometry.attributes.position;
@@ -2162,7 +2331,6 @@ export class VRControls extends EventDispatcher{
 		}
 
 		const bestPoint = bestNode ? bestLocal.applyMatrix4(bestNode.sceneNode.matrixWorld) : null;
-		console.log('[VRPTS] raycast result=' + (bestPoint ? bestPoint.x.toFixed(0)+','+bestPoint.y.toFixed(0) : 'null'));
 		return bestPoint;
 	}
 
@@ -2269,15 +2437,23 @@ export class VRControls extends EventDispatcher{
 		this.polygonMode = true;
 		this._polygonPoints = [];
 
-		// Cámara de proyección "según tu vista": ortográfica situada en la pose de la cabeza
-		// y orientada en la dirección de la mirada → el recorte se extruye como prisma recto
-		// en esa dirección. Espacio escena (mismo que _raycastPointClouds, vía this.toScene).
-		const fakeCam = new THREE.PerspectiveCamera();
-		const camVR = this.viewer.renderer.xr.getCamera(fakeCam);
-		const vrPos = camVR.getWorldPosition(new THREE.Vector3());
-		const vrDir = camVR.getWorldDirection(new THREE.Vector3());
-		const scenePos = this.toScene(vrPos);
-		const sceneDir = this.toScene(vrPos.clone().add(vrDir)).sub(scenePos).normalize();
+		// Cámara de proyección "según tu vista": ortográfica situada en la pose de la cabeza/cámara
+		// y orientada en la dirección de la mirada → el recorte se extruye como prisma recto en esa
+		// dirección. En escritorio la cámara activa ya está en espacio escena (sin toScene); en VR
+		// se parte de la cámara XR y se convierte con this.toScene (igual que _raycastPointClouds).
+		let scenePos, sceneDir;
+		if(this._isDesktop()){
+			const cam0 = this.viewer.scene.getActiveCamera();
+			scenePos = cam0.getWorldPosition(new THREE.Vector3());
+			sceneDir = cam0.getWorldDirection(new THREE.Vector3()).normalize();
+		}else{
+			const fakeCam = new THREE.PerspectiveCamera();
+			const camVR = this.viewer.renderer.xr.getCamera(fakeCam);
+			const vrPos = camVR.getWorldPosition(new THREE.Vector3());
+			const vrDir = camVR.getWorldDirection(new THREE.Vector3());
+			scenePos = this.toScene(vrPos);
+			sceneDir = this.toScene(vrPos.clone().add(vrDir)).sub(scenePos).normalize();
+		}
 
 		// Tamaño del frustum ortográfico ~ diagonal de la nube (irrelevante para el test, que
 		// es invariante a escala, pero mantiene NDC en un rango razonable).
@@ -2385,14 +2561,7 @@ export class VRControls extends EventDispatcher{
 	// ===== Punto de información =====
 
 	_raycastPointCloudsWithAttrs(controller){
-		const originVR = new THREE.Vector3();
-		const quat = new THREE.Quaternion();
-		controller.getWorldPosition(originVR);
-		controller.getWorldQuaternion(quat);
-
-		const dirVR = new THREE.Vector3(0, 0, -1).applyQuaternion(quat);
-		const originWorld = this.toScene(originVR);
-		const dirWorld = this.toScene(originVR.clone().add(dirVR)).sub(originWorld).normalize();
+		const { origin: originWorld, dir: dirWorld } = this._pointerWorldRay(controller);
 
 		const ray = new THREE.Ray(originWorld, dirWorld);
 		const invMat = new THREE.Matrix4();
@@ -3004,15 +3173,9 @@ export class VRControls extends EventDispatcher{
 	}
 
 	_clipPointerRay(controller){
-		if(!controller) return null;
-		const originVR = new THREE.Vector3();
-		const quat = new THREE.Quaternion();
-		controller.getWorldPosition(originVR);
-		controller.getWorldQuaternion(quat);
-		const dirVR = new THREE.Vector3(0, 0, -1).applyQuaternion(quat);
-		const origin = this.toScene(originVR);
-		const direction = this.toScene(originVR.clone().add(dirVR)).sub(origin).normalize();
-		return { origin, direction };
+		if(!controller && !this._isDesktop()) return null;
+		const { origin, dir } = this._pointerWorldRay(controller);
+		return { origin, direction: dir };
 	}
 
 	_placeClipBox(controller){
@@ -3268,19 +3431,19 @@ export class VRControls extends EventDispatcher{
 				const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(quat);
 				this._menuRaycaster.set(origin, dir);
 				const hits = this._menuRaycaster.intersectObjects(interactives);
-
-				for(const btn of interactives){
-					const isHovered = hits.length > 0 && hits[0].object === btn;
-					if(btn.userData.hovered !== isHovered){
-						btn.userData.hovered = isHovered;
-						if(btn.userData.redraw) btn.userData.redraw(isHovered);
-					}
-				}
+				this._applyMenuHover(hits, interactives);
 			}
 		}
 
 		this.mode.update(this, delta);
 
+		this._updateActiveModes(delta, pointer);
+	}
+
+	// Trabajo por-frame de los modos de colocación (previews, spray, overrides de clasificación,
+	// tiradores de recorte). Compartido entre el bucle VR (update) y el de escritorio
+	// (desktopUpdate); todo el raycasting pasa por _pointerWorldRay, que es desktop-aware.
+	_updateActiveModes(delta, pointer){
 		// Reducir el tamaño de punto al mínimo mientras se colocan medidas, puntos de
 		// información o se edita clasificación, para apuntar con más precisión.
 		const placing = this.pointsMode || this.infoPointMode || this.editClassMode || this.polygonMode;
@@ -3292,13 +3455,7 @@ export class VRControls extends EventDispatcher{
 
 		// Preview del modo Puntos
 		if(this.pointsMode && !(this.activeMenu && this.activeMenu.visible)){
-			console.log('[VRPTS] preview tick');
-			try {
-				this._updatePreviewMarker(pointer);
-				console.log('[VRPTS] preview ok');
-			} catch(e) {
-				console.log('[VRPTS] ERROR preview: ' + e.message + '\n' + (e.stack || ''));
-			}
+			this._updatePreviewMarker(pointer);
 		}
 
 		// Preview del modo Dibujar Polígono (arista en vivo desde el último punto)
@@ -3368,6 +3525,13 @@ export class VRControls extends EventDispatcher{
 				this._updateClipHover(pointer);
 			}
 		}
+	}
 
+	// Tick por-frame en escritorio: corre el trabajo de modos con el rayo del ratón cuando hay un
+	// modo de colocación activo (o quedan overrides por reaplicar). No toca navegación ni menú.
+	desktopUpdate(delta){
+		if(!this._isDesktop()) return;
+		if(!this._anyPlacementModeActive() && this.editClassOverrides.size === 0) return;
+		this._updateActiveModes(delta, this.cPrimary);
 	}
 };

@@ -1807,6 +1807,12 @@ export class Viewer extends EventDispatcher{
 		camera.updateMatrixWorld();
 		camera.matrixWorldInverse.copy(camera.matrixWorld).invert();
 
+		// Tick de los modos de colocación VR conducidos por ratón en escritorio (recorte,
+		// polígono, reclasificación). Aquí la matrixWorld de la cámara activa ya está al día.
+		if(!this.renderer.xr.isPresenting && this.vrControls){
+			this.vrControls.desktopUpdate(delta);
+		}
+
 		{
 			if(this._previousCamera === undefined){
 				this._previousCamera = this.scene.getActiveCamera().clone();
@@ -2191,6 +2197,13 @@ export class Viewer extends EventDispatcher{
 
 		pRenderer.render(this.renderer);
 		this.renderer.render(this.overlay, this.overlayCamera);
+
+		// Menú VR en escritorio: dibujar la sceneVR como HUD (siempre encima) cuando hay
+		// un menú abierto, para poder probarlo/medirlo con ratón fuera de las gafas.
+		if(this.vrControls && this.vrControls.activeMenu && this.vrControls.activeMenu.visible){
+			this.renderer.clearDepth();
+			this.renderer.render(this.sceneVR, this.scene.getActiveCamera());
+		}
 	}
 	
 	render(){
