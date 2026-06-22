@@ -123,6 +123,13 @@
 
   let viewmode = 2;
   let cloudIndex = 1;
+  // Inicio del modo paseo colocado con "Colocar inicio del Paseo" (menú VR), POR NUBE: mapa
+  // cloudId → [x, y, z] (espacio escala x10). Persiste durante la sesión; tiene prioridad sobre
+  // las coordenadas por defecto de cada nube.
+  window.walkStartOverrides = {};
+  // Nubes propias añadidas por el usuario (mismo selector que las base). Cada una: {id, name, url, start}.
+  window.customClouds = [];
+  window._customCloudSeq = 0;
 
   function getCloudUrl(idx) {
     switch(idx) {
@@ -147,6 +154,7 @@
   viewer.loadGUI(() => {
     viewer.setLanguage('en');
     $("#menu_appearance").next().show();
+    setupAddCloudSidebar();
     viewer.toggleSidebar();
   });
   loadCloudMode(viewmode);
@@ -179,8 +187,24 @@
 
   // Recibe la selección de nube desde el submenú VR
   document.addEventListener('vr-cloud-select', (e) => {
-    cloudIndex = e.detail.cloud;
+    const id = e.detail.cloud;
     window.anomaliesWanted = false; // al cambiar de nube, partir con anomalías ocultas
+    // El inicio de paseo colocado se conserva por nube (window.walkStartOverrides), no se borra.
+    // Nube propia del usuario: localizarla en el registro y activarla.
+    if (String(id).startsWith('custom')) {
+      const entry = (window.customClouds || []).find(c => c.id === id);
+      if (!entry) { console.warn('[CustomCloud] no encontrada en el registro:', id); return; }
+      window.customCloud = { url: entry.url, start: entry.start };
+    }
+    cloudIndex = id;
+    loadCloudMode(viewmode);
+  });
+
+  // "Colocar inicio del Paseo" (menú VR): recarga el modo paseo en el punto calculado.
+  // El override ya viene en el espacio del modo paseo (escala x10); syncVRToScene lo aplica.
+  document.addEventListener('vr-set-walk-start', (e) => {
+    window.walkStartOverrides[cloudIndex] = e.detail.start; // guardar POR NUBE ([x,y,z] escala x10)
+    viewmode = 2;
     loadCloudMode(viewmode);
   });
 
@@ -239,6 +263,17 @@
   }
 
   function syncVRToScene() {
+    // "Colocar inicio del Paseo": si hay un inicio colocado y estamos en modo paseo, situar la
+    // cámara ahí (después de que el cargador haya fijado su posición por defecto, ya que cada
+    // cargador llama a syncVRToScene() como último paso).
+    const ov = window.walkStartOverrides[cloudIndex];
+    if (viewmode === 2 && ov && ov.length === 3) {
+      const camPos = new THREE.Vector3(...ov);
+      viewer.scene.view.position.copy(camPos);
+      const lookAtPos = camPos.clone();
+      lookAtPos.y += 1;
+      viewer.scene.view.lookAt(lookAtPos);
+    }
     if (viewer.renderer.xr.isPresenting && viewer.vrControls) {
       viewer.vrControls.onStart();
     }
@@ -249,6 +284,7 @@
     if (cloudIndex === 'gran_corredor') { loadGranCorridorCloud(viewmode); return; }
     if (cloudIndex === 'gran_corredor_2') { loadGranCorridor2Cloud(viewmode); return; }
     if (cloudIndex === 'anomalias') { loadAnomaliesCloud(viewmode); return; }
+    if (String(cloudIndex).startsWith('custom')) { loadCustomCloud(viewmode); return; }
     clearPointClouds();
     switch (viewmode) {
 
@@ -328,6 +364,191 @@
 
         break;
     }
+  }
+
+  // ───────────────────── Agregar nube de puntos (formulario en la barra lateral) ─────────────────────
+  // Inyecta una nueva sección de acordeón en la barra lateral de Potree con un formulario HTML
+  // nativo para que el usuario cargue su propia nube por URL (copiar/pegar nativo) y, opcionalmente,
+  // un punto de inicio (x,y,z) para el modo paseo.
+  function setupAddCloudSidebar() {
+    if ($('#menu_add_cloud').length > 0) return;       // ya inyectado
+    const menu = $('#potree_menu');
+    if (menu.length === 0) return;
+
+    const html = `
+      <h3 id="menu_add_cloud"><span>Agregar nube de puntos</span></h3>
+      <div>
+        <ul class="pv-menu-list">
+          <li style="list-style:none; margin-top:6px;">
+            <label for="addcloud_name">Nombre de la nube <span style="color:#ff6b6b;">*</span></label>
+            <input id="addcloud_name" type="text" placeholder="Mi nube" style="width:100%; box-sizing:border-box; margin-top:4px;">
+          </li>
+          <li style="list-style:none; margin-top:10px;">
+            <label for="addcloud_url">Enlace HTTPS a la nube <span style="color:#ff6b6b;">*</span></label>
+            <input id="addcloud_url" type="text" placeholder="https://…/metadata.json" style="width:100%; box-sizing:border-box; margin-top:4px;">
+          </li>
+          <li style="list-style:none; margin-top:10px;">
+            <label><input id="addcloud_start_enabled" type="checkbox"> Establecer punto de inicio para el modo paseo</label>
+          </li>
+          <li style="list-style:none; margin-top:6px;">
+            <div style="display:flex; gap:6px;">
+              <span style="flex:1;">X<input id="addcloud_x" type="number" step="any" disabled style="width:100%; box-sizing:border-box;"></span>
+              <span style="flex:1;">Y<input id="addcloud_y" type="number" step="any" disabled style="width:100%; box-sizing:border-box;"></span>
+              <span style="flex:1;">Z<input id="addcloud_z" type="number" step="any" disabled style="width:100%; box-sizing:border-box;"></span>
+            </div>
+          </li>
+          <li style="list-style:none; margin-top:10px;">
+            <input id="addcloud_submit" type="button" value="Aceptar" style="cursor:pointer;">
+          </li>
+          <li style="list-style:none;">
+            <div id="addcloud_error" style="display:none; margin-top:10px; padding:8px; background:#5a1a1a; border:1px solid #ff6b6b; color:#ffe0e0; border-radius:4px;">
+              <div id="addcloud_error_msg"></div>
+              <input id="addcloud_error_ok" type="button" value="Aceptar" style="margin-top:8px; cursor:pointer;">
+            </div>
+          </li>
+        </ul>
+      </div>`;
+
+    menu.prepend(html);
+
+    // El acordeón es un toggle propio (ver Sidebar.initAccordion): el header despliega su <div>.
+    const header = $('#menu_add_cloud');
+    const content = header.next();
+    content.hide();
+    header.click(() => content.slideToggle());
+
+    // La casilla habilita/deshabilita los campos de coordenadas.
+    $('#addcloud_start_enabled').on('change', function () {
+      const on = this.checked;
+      ['addcloud_x', 'addcloud_y', 'addcloud_z'].forEach(id => { document.getElementById(id).disabled = !on; });
+    });
+
+    $('#addcloud_error_ok').on('click', () => $('#addcloud_error').hide());
+    $('#addcloud_submit').on('click', onAddCloudSubmit);
+  }
+
+  function showAddCloudError(msg) {
+    $('#addcloud_error_msg').text(msg);
+    $('#addcloud_error').show();
+  }
+
+  // Normaliza la URL: si no apunta ya a un recurso de nube conocido, le añade /metadata.json.
+  function normalizeCloudUrl(raw) {
+    let u = (raw || '').trim();
+    const known = ['metadata.json', 'ept.json', 'cloud.js', '.copc.laz', '.vpc'];
+    if (!known.some(k => u.includes(k))) u = u.replace(/\/+$/, '') + '/metadata.json';
+    return u;
+  }
+
+  // Valida nombre + enlace (https + accesible + JSON de nube) y, si es correcto: registra la nube
+  // en el selector (con su nombre) y la carga — aéreo si no hay punto de inicio, paseo en (x,y,z)
+  // si lo hay. Si falla, muestra el error rojo.
+  function onAddCloudSubmit() {
+    $('#addcloud_error').hide();
+    const name = ($('#addcloud_name').val() || '').trim();
+    if (!name) { showAddCloudError('Introduce un nombre para la nube.'); return; }
+    const url = normalizeCloudUrl($('#addcloud_url').val());
+    if (!/^https:\/\//i.test(url)) { showAddCloudError('El enlace debe empezar por https://'); return; }
+
+    let start = null;
+    if ($('#addcloud_start_enabled').is(':checked')) {
+      const nums = [$('#addcloud_x').val(), $('#addcloud_y').val(), $('#addcloud_z').val()].map(parseFloat);
+      if (nums.every(Number.isFinite)) start = nums;
+      else { showAddCloudError('Introduce las tres coordenadas (X, Y, Z) o desmarca el punto de inicio.'); return; }
+    }
+
+    const btn = document.getElementById('addcloud_submit');
+    btn.value = 'Comprobando…';
+    btn.disabled = true;
+    const restore = () => { btn.value = 'Aceptar'; btn.disabled = false; };
+
+    fetch(url)
+      .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(() => {
+        restore();
+        // Registrar la nube en el selector (lista compartida) con un id único.
+        const entry = { id: 'custom_' + (window._customCloudSeq++), name, url, start };
+        window.customClouds.push(entry);
+        document.dispatchEvent(new CustomEvent('vr-register-cloud', { detail: { id: entry.id, name: entry.name } }));
+
+        // Activarla y cargarla.
+        window.customCloud = { url: entry.url, start: entry.start };
+        window.anomaliesWanted = false;
+        cloudIndex = entry.id;
+        viewmode = start ? 2 : 1;          // con punto de inicio → paseo; sin él → aéreo
+        loadCloudMode(viewmode);
+
+        // Limpiar el formulario para la siguiente nube.
+        $('#addcloud_name').val('');
+        $('#addcloud_url').val('');
+      })
+      .catch(() => {
+        restore();
+        showAddCloudError('No se pudo cargar la nube. Revisa el enlace.');
+      });
+  }
+
+  // Carga una nube propia del usuario (URL en window.customCloud.url). Espeja los cuerpos
+  // aéreo (case 1) y paseo (case 2) de loadCloudMode, pero usando la URL del usuario y, en
+  // paseo, su punto de inicio window.customCloud.start = [x, y, z] (o el centro del bbox si no
+  // lo indicó). Las coordenadas se interpretan en el sistema propio de la nube.
+  function loadCustomCloud(viewmode) {
+    clearPointClouds();
+    const url = window.customCloud && window.customCloud.url;
+    if (!url) { console.warn('[CustomCloud] no hay URL que cargar'); return; }
+
+    if (viewmode === 2) viewer.setControls(new Potree.FirstPersonControls(viewer));
+
+    Potree.loadPointCloud(url).then(e => {
+      let pointcloud = e.pointcloud;
+      let material = pointcloud.material;
+      material.pointSizeType = Potree.PointSizeType.ADAPTIVE;
+      viewer.scene.addPointCloud(pointcloud);
+
+      if (viewmode === 2) { // Modo paseo
+        material.size = 0.5;
+        pointcloud.scale.set(10, 10, 10);
+        pointcloud.updateMatrix();
+
+        let size = pointcloud.boundingBox.getSize(new THREE.Vector3());
+        viewer.scene.getActiveCamera().near = 0.1;
+        viewer.scene.getActiveCamera().far = Math.max(size.x, size.y, size.z) * 10;
+        viewer.scene.getActiveCamera().updateProjectionMatrix();
+
+        let start = window.customCloud.start;
+        let camPos;
+        if (start && start.length === 3 && start.every(Number.isFinite)) {
+          camPos = new THREE.Vector3(start[0], start[1], start[2]);
+        } else {
+          pointcloud.updateMatrixWorld(true);
+          let wb = pointcloud.boundingBox.clone().applyMatrix4(pointcloud.matrixWorld);
+          camPos = wb.getCenter(new THREE.Vector3());
+        }
+        viewer.scene.view.position.copy(camPos);
+        let lookAtPos = camPos.clone();
+        lookAtPos.y += 1;
+        viewer.scene.view.lookAt(lookAtPos);
+        viewer.setMoveSpeed(10);
+      } else { // Modo aéreo
+        material.size = 1;
+        pointcloud.updateMatrixWorld(true);
+        let bbox = pointcloud.boundingBox.clone();
+        bbox.applyMatrix4(pointcloud.matrixWorld);
+        let center = bbox.getCenter(new THREE.Vector3());
+        let bsize = bbox.getSize(new THREE.Vector3());
+        let distance = Math.max(bsize.x, bsize.y, bsize.z) * 1.2;
+
+        let camPos = new THREE.Vector3(center.x + distance, center.y - distance, center.z + distance);
+        viewer.scene.view.position.copy(camPos);
+        viewer.scene.view.lookAt(center);
+
+        viewer.scene.getActiveCamera().near = Math.max(0.1, distance / 1000);
+        viewer.scene.getActiveCamera().far = distance * 20;
+        viewer.scene.getActiveCamera().updateProjectionMatrix();
+        viewer.setMoveSpeed(distance / 5);
+      }
+      syncVRToScene();
+    });
   }
 
   // Carga combinada del corredor: nubes 1, 2 y 3 a la vez.

@@ -337,6 +337,8 @@ export class VRControls extends EventDispatcher{
 		this.attributeMenu = null;
 		this._attributeRefresh = null;
 		this.activeMenu = null;
+		// Entradas del selector de nubes (base + nubes propias añadidas por el usuario)
+		this.cloudMenuEntries = this._defaultCloudEntries();
 		this._dragging = null;
 		this._menuRaycaster = new THREE.Raycaster();
 
@@ -344,6 +346,7 @@ export class VRControls extends EventDispatcher{
 		this._pickRaycaster = new THREE.Raycaster();
 		this._desktopPointerNDC = new THREE.Vector2(0, 0);
 		this._desktopDown = null;
+		this._desktopSprayStroke = false;
 
 		const controllerModelFactory = new XRControllerModelFactory();
 		// Prefer a local copy of the webxr-input-profiles assets to avoid
@@ -479,6 +482,9 @@ export class VRControls extends EventDispatcher{
 		this.infoPointMeasure = null;    // Potree.Measure (esfera + label) una vez colocado
 		this.infoPreviewMeasure = null;  // Potree.Measure de la esfera fantasma mientras se apunta
 
+		// Colocar inicio del Paseo: coloca un punto y recalcula el inicio del modo paseo
+		this.walkStartMode = false;
+
 		// Tamaño de punto reducido durante la colocación (medidas, info, clasificación)
 		this._placementShrinkActive = false;
 		this._savedPointSizes = null;
@@ -507,6 +513,7 @@ export class VRControls extends EventDispatcher{
 		this.editClassTarget = null;        // { code:int, name:string }
 		this.editClassPreviewMeasure = null;
 		this.editClassLog = [];             // [{x,y,z,fromCode,toCode,fromName,toName,ts}]
+		this._reclassSessionStart = 0;      // índice en editClassLog donde empezó la sesión de edición actual
 		this.editClassOverrides = new Map();// key: "x|y|z" en coords del pointcloud → newCode
 		this._editClassProcessedNodes = new WeakSet();
 		// Contexto: rejilla "Editar Clasificación" abierta desde el clip → aplicar al segmento (cajas)
@@ -530,9 +537,15 @@ export class VRControls extends EventDispatcher{
 			if(e.detail.mode !== 3 && this.pointsMode) this._finishMeasurement();
 			this.pointsMode = (e.detail.mode === 3);
 			if(this.infoPointMode){ this.infoPointMode = false; this._clearInfoPreview(); }
-			if(this.editClassMode){ this.editClassMode = false; this._clearEditClassPreview(); }
+			if(this.walkStartMode){ this.walkStartMode = false; this._clearInfoPreview(); }
+			if(this.editClassMode){ this._finishEditClassSession(); }
 			if(this.editClassSegmentMode){ this.editClassSegmentMode = false; }
 			this.editClassSprayActive = false;
+		});
+
+		// La página añade una nube propia al selector (desde el formulario de la barra lateral).
+		document.addEventListener('vr-register-cloud', (e) => {
+			this._addCloudToSelector(e.detail.id, e.detail.name);
 		});
 	}
 
@@ -653,10 +666,14 @@ export class VRControls extends EventDispatcher{
 		group.add(btnEditClass);
 
 		const btnAnomalies = this._createMenuButton('Ver\nAnomalías', 'TOGGLE_ANOMALIES');
-		btnAnomalies.position.set(0, -0.46, 0.002);
+		btnAnomalies.position.set(-0.17, -0.46, 0.002);
 		group.add(btnAnomalies);
 
-		group.userData.interactives = [btnWalk, btnGod, btnPoints, btnAppearance, btnAttribute, btnClip, btnChangeCloud, btnEditClass, btnAnomalies];
+		const btnWalkStart = this._createMenuButton('Colocar inicio\ndel Paseo', 'PLACE_WALK_START');
+		btnWalkStart.position.set(0.17, -0.46, 0.002);
+		group.add(btnWalkStart);
+
+		group.userData.interactives = [btnWalk, btnGod, btnPoints, btnAppearance, btnAttribute, btnClip, btnChangeCloud, btnEditClass, btnAnomalies, btnWalkStart];
 		this.viewer.sceneVR.add(group);
 		this.mainMenu = group;
 		window.vrMenu = group;
@@ -903,17 +920,17 @@ export class VRControls extends EventDispatcher{
 		if(!this.mainMenu) return;
 		if(this.activeMenu){
 			this._hideAllMenus();
-			if(this._isDesktop()) this._setDesktopMenuActive(false);
+			if(this._isDesktop()) this._setDesktopNavFrozen(false);
 		} else {
 			this._showMenu(this.mainMenu);
-			if(this._isDesktop()) this._setDesktopMenuActive(true);
+			if(this._isDesktop()) this._setDesktopNavFrozen(true);
 		}
 	}
 
-	// Congela/restaura la navegación de cámara mientras el menú está abierto en escritorio.
+	// Congela/restaura la navegación de cámara en escritorio (menú abierto o trazo de spray).
 	// Se quita/agrega el listener del InputHandler porque los controles no respetan el flag
 	// `enabled` en sus handlers de arrastre.
-	_setDesktopMenuActive(active){
+	_setDesktopNavFrozen(active){
 		if(active === !!this._desktopFrozen) return;
 		this._desktopFrozen = active;
 		const ih = this.viewer.inputHandler;
@@ -928,7 +945,7 @@ export class VRControls extends EventDispatcher{
 
 	// ¿Hay algún modo de colocación activo (recorte, polígono, reclasificación, medidas)?
 	_anyPlacementModeActive(){
-		return !!(this.clipMode || this.polygonMode || this.editClassMode || this.pointsMode || this.infoPointMode);
+		return !!(this.clipMode || this.polygonMode || this.editClassMode || this.pointsMode || this.infoPointMode || this.walkStartMode);
 	}
 
 	// Enlaza (una sola vez) los listeners de ratón que conducen el menú VR y los modos de
@@ -969,13 +986,42 @@ export class VRControls extends EventDispatcher{
 			}
 		});
 
+		// ¿Estamos en reclasificación spray, fuera del menú? (botón izq. = pintar con cámara bloqueada)
+		const sprayPaintingMode = () =>
+			this.editClassMode && this.reclassMode === 'spray' && !(this.activeMenu && this.activeMenu.visible);
+
+		// Termina el trazo de spray: detiene el pintado y descongela la cámara.
+		const endSprayStroke = () => {
+			if(!this._desktopSprayStroke) return;
+			this._desktopSprayStroke = false;
+			this.onTriggerEnd(this.cPrimary);     // editClassSprayActive = false
+			this._setDesktopNavFrozen(false);
+		};
+
 		dom.addEventListener('mousedown', (ev) => {
 			if(!this._isDesktop()) return;
 			this._desktopDown = { x: ev.clientX, y: ev.clientY, button: ev.button };
+
+			// Spray: el botón izquierdo BLOQUEA la cámara y pinta de forma continua mientras se
+			// mantiene pulsado (el pintado por-frame ocurre en _updateActiveModes siguiendo el ratón).
+			if(ev.button === 0 && sprayPaintingMode()){
+				this._desktopSprayStroke = true;
+				this._setDesktopNavFrozen(true);
+				updateNDC(ev);
+				this.onTriggerStart(this.cPrimary); // editClassSprayActive = true + primera pasada
+			}
 		});
 
 		dom.addEventListener('mouseup', (ev) => {
 			if(!this._isDesktop()) return;
+
+			// Fin del trazo de spray (puede haber sido un arrastre, no un tap).
+			if(this._desktopSprayStroke && ev.button === 0){
+				endSprayStroke();
+				this._desktopDown = null;
+				return;
+			}
+
 			const tap = isTap(ev);
 			const button = ev.button;
 			this._desktopDown = null;
@@ -998,16 +1044,22 @@ export class VRControls extends EventDispatcher{
 				this._applyMenuHover(hits, interactives);
 				this.onTriggerStart(this.cPrimary);
 				this._dragging = null; // el arrastre de slider es sólo-VR; los +/− bastan en desktop
-				if(!this.activeMenu) this._setDesktopMenuActive(false);
+				if(!this.activeMenu) this._setDesktopNavFrozen(false);
 				return;
 			}
 
 			// 2) Si hay un modo de colocación activo → un tap = una acción (colocar / reclasificar
-			//    / añadir vértice). Se cierra de inmediato cualquier estado de arrastre/spray.
+			//    punto-por-punto / añadir vértice). Se cierra de inmediato cualquier estado de spray/drag.
 			if(this._anyPlacementModeActive()){
 				this.onTriggerStart(this.cPrimary);
 				this.onTriggerEnd(this.cPrimary);
 			}
+		});
+
+		// Seguridad: si se suelta el ratón fuera del lienzo durante un trazo de spray, terminarlo
+		// igualmente para no dejar la cámara congelada.
+		dom.addEventListener('mouseleave', () => {
+			if(this._isDesktop()) endSprayStroke();
 		});
 
 		// Suprimir el menú contextual del navegador mientras hay un modo activo (el clic derecho
@@ -1542,24 +1594,9 @@ export class VRControls extends EventDispatcher{
 		this.attributeMenu = group;
 	}
 
-	_createCloudMenu(){
-		const group = new THREE.Group();
-		group.name = 'vr-cloud-menu';
-		group.visible = false;
-
-		const bgMat = new THREE.MeshBasicMaterial({
-			color: 0x0d1b2e, transparent: true, opacity: 0.88, side: THREE.DoubleSide,
-		});
-		const bg = new THREE.Mesh(new THREE.PlaneGeometry(0.64, 1.16), bgMat);
-		bg.position.set(0, -0.13, 0);
-		group.add(bg);
-
-		const title = this._createMenuTitle('NUBE DE PUNTOS');
-		title.scale.set(0.093, 0.093, 0.093);
-		title.position.set(0, 0.32, 0.002);
-		group.add(title);
-
-		const clouds = [
+	// Nubes base del selector (las propias del usuario se añaden con _addCloudToSelector).
+	_defaultCloudEntries(){
+		return [
 			{ label: 'Tramo A\n563.4 MB', cloud: 1 },
 			{ label: 'Tramo B\n467.58 MB', cloud: 2 },
 			{ label: 'Tramo C\n498.86 MB', cloud: 3 },
@@ -1569,28 +1606,82 @@ export class VRControls extends EventDispatcher{
 			{ label: 'Paseo Garañón\n1011 MB', cloud: 'gran_corredor_2' },
 			{ label: 'Red Eléctrica\ncon Anomalías\n319 MB', cloud: 'anomalias' },
 		];
-		const positions = [
-			{ x: -0.17, y: 0.16 }, { x: 0.17, y: 0.16 },
-			{ x: -0.17, y: 0.02 }, { x: 0.17, y: 0.02 },
-			{ x: -0.17, y: -0.12 }, { x: 0.17, y: -0.12 },
-			{ x: -0.17, y: -0.26 }, { x: 0.17, y: -0.26 },
-		];
+	}
 
-		const btns = clouds.map(({ label, cloud }, i) => {
-			const btn = this._createMenuButton(label, 'SELECT_CLOUD');
-			btn.userData.cloudId = cloud;
-			btn.position.set(positions[i].x, positions[i].y, 0.002);
+	_createCloudMenu(){
+		const group = new THREE.Group();
+		group.name = 'vr-cloud-menu';
+		group.visible = false;
+		this.viewer.sceneVR.add(group);
+		this.cloudMenu = group;
+		this._buildCloudMenuContents();
+	}
+
+	// (Re)construye el contenido del selector a partir de this.cloudMenuEntries. El panel se
+	// dimensiona según el número de nubes, de modo que las nubes propias del usuario aparecen
+	// como botones más, junto a las base.
+	_buildCloudMenuContents(){
+		const group = this.cloudMenu;
+		if(!group) return;
+
+		// Liberar y quitar el contenido anterior
+		for(const child of group.children.slice()){
+			group.remove(child);
+			if(child.material){
+				if(child.material.map) child.material.map.dispose();
+				child.material.dispose();
+			}
+			if(child.geometry) child.geometry.dispose();
+		}
+
+		const entries = this.cloudMenuEntries || (this.cloudMenuEntries = this._defaultCloudEntries());
+		const xs = [-0.17, 0.17];
+		const startY = 0.16;   // primera fila de botones
+		const rowH = 0.145;
+		const nRows = Math.max(1, Math.ceil(entries.length / 2));
+		const backY = startY - nRows * rowH - 0.02;
+		const titleY = startY + 0.18;
+
+		// Fondo dimensionado al contenido
+		const bgMat = new THREE.MeshBasicMaterial({
+			color: 0x0d1b2e, transparent: true, opacity: 0.88, side: THREE.DoubleSide,
+		});
+		const topEdge = titleY + 0.06;
+		const bottomEdge = backY - 0.08;
+		const bg = new THREE.Mesh(new THREE.PlaneGeometry(0.64, topEdge - bottomEdge), bgMat);
+		bg.position.set(0, (topEdge + bottomEdge) / 2, 0);
+		group.add(bg);
+
+		const title = this._createMenuTitle('NUBE DE PUNTOS');
+		title.scale.set(0.093, 0.093, 0.093);
+		title.position.set(0, titleY, 0.002);
+		group.add(title);
+
+		const btns = entries.map((entry, i) => {
+			const col = i % 2, row = Math.floor(i / 2);
+			const btn = this._createMenuButton(entry.label, 'SELECT_CLOUD');
+			btn.userData.cloudId = entry.cloud;
+			btn.position.set(xs[col], startY - row * rowH, 0.002);
 			group.add(btn);
 			return btn;
 		});
 
 		const btnBack = this._createMenuButton('← Volver', 'BACK_TO_MAIN');
-		btnBack.position.set(0, -0.52, 0.002);
+		btnBack.position.set(0, backY, 0.002);
 		group.add(btnBack);
 
 		group.userData.interactives = [...btns, btnBack];
-		this.viewer.sceneVR.add(group);
-		this.cloudMenu = group;
+	}
+
+	// Añade una nube propia (URL) al selector con la etiqueta `name`. Si el menú ya existe lo
+	// reconstruye en vivo; si aún no, quedará incluida cuando se cree.
+	_addCloudToSelector(id, name){
+		if(!this.cloudMenuEntries) this.cloudMenuEntries = this._defaultCloudEntries();
+		if(this.cloudMenuEntries.some(e => e.cloud === id)) return; // evitar duplicados
+		let label = (name || 'Nube').trim();
+		if(label.length > 16) label = label.slice(0, 15) + '…';
+		this.cloudMenuEntries.push({ label, cloud: id });
+		if(this.cloudMenu) this._buildCloudMenuContents();
 	}
 
 	_createEditClassMenu(){
@@ -1665,17 +1756,10 @@ export class VRControls extends EventDispatcher{
 		group.add(btnAny);
 		interactives.push(btnAny);
 
-		// Botón "Exportar log .txt"
-		const btnExport = this._createMenuButton('Exportar log .txt', 'EDIT_CLASS_EXPORT_LOG',
-			{ width: 0.40, height: 0.14, canvasW: 360 });
-		btnExport.position.set(-0.29, -0.625, 0.002);
-		group.add(btnExport);
-		interactives.push(btnExport);
-
-		// Botón "Volver"
+		// Botón "Volver" (los cambios de clasificación ya se guardan solos en .json al terminar)
 		const btnBack = this._createMenuButton('← Volver', 'BACK_TO_MAIN',
 			{ width: 0.40, height: 0.14, canvasW: 360 });
-		btnBack.position.set(0.29, -0.625, 0.002);
+		btnBack.position.set(0, -0.625, 0.002);
 		group.add(btnBack);
 		interactives.push(btnBack);
 
@@ -1929,6 +2013,10 @@ export class VRControls extends EventDispatcher{
 					this._hideAllMenus();
 					return;
 				}
+				if(ud.modeId === 'PLACE_WALK_START'){
+					this._startWalkStartMode();
+					return;
+				}
 
 				// Submenú de medidas
 				if(ud.modeId === 'OPEN_MEASURE'){
@@ -2044,11 +2132,6 @@ export class VRControls extends EventDispatcher{
 					}
 					return;
 				}
-				if(ud.modeId === 'EDIT_CLASS_EXPORT_LOG'){
-					this._exportEditClassLog();
-					return;
-				}
-
 				// Handle de slider → iniciar drag
 				if(ud.role === 'handle'){
 					const slider = ud.parentSlider;
@@ -2107,6 +2190,11 @@ export class VRControls extends EventDispatcher{
 
 		if(this.infoPointMode){
 			this._placeInfoPoint(controller);
+			return;
+		}
+
+		if(this.walkStartMode){
+			this._placeWalkStart(controller);
 			return;
 		}
 
@@ -2196,9 +2284,14 @@ export class VRControls extends EventDispatcher{
 			return;
 		}
 
+		if(this.walkStartMode){
+			this.walkStartMode = false;
+			this._clearInfoPreview();
+			return;
+		}
+
 		if(this.editClassMode){
-			this.editClassMode = false;
-			this._clearEditClassPreview();
+			this._finishEditClassSession();
 			return;
 		}
 
@@ -2619,6 +2712,42 @@ export class VRControls extends EventDispatcher{
 		this._hideAllMenus();
 	}
 
+	_startWalkStartMode(){
+		if(this.pointsMode) this._finishMeasurement();
+		if(this.infoPointMode){ this.infoPointMode = false; this._clearInfoPreview(); }
+		this.walkStartMode = true;
+		this._hideAllMenus();
+	}
+
+	// Coloca el inicio del modo paseo: raycast al punto bajo el mando, convierte sus coordenadas al
+	// espacio del modo paseo (la nube se escala x10) y pide a la página recargar el paseo ahí.
+	_placeWalkStart(controller){
+		const result = this._raycastPointCloudsWithAttrs(controller);
+		if(!result || !result.position) return; // sin impacto: seguir en el modo para reintentar
+
+		const pc = result.pointcloud || this.viewer.scene.pointclouds[0];
+		if(!pc) return;
+
+		// Punto en coords de mundo (a la escala actual) → coords locales de la nube (invariantes a la
+		// escala). Luego se recompone la posición de mundo como si la nube estuviese a escala 10 (la
+		// del modo paseo), respetando la transformación del padre.
+		pc.updateMatrixWorld(true);
+		const local = pc.worldToLocal(result.position.clone());
+		const parentWorld = pc.parent ? pc.parent.matrixWorld : new THREE.Matrix4();
+		const localMat10 = new THREE.Matrix4().compose(pc.position, pc.quaternion, new THREE.Vector3(10, 10, 10));
+		const world10 = new THREE.Matrix4().multiplyMatrices(parentWorld, localMat10);
+		const walkWorld = local.applyMatrix4(world10);
+		walkWorld.z += 20.7; // altura de los ojos (mismo offset que las nubes existentes, en escala x10)
+
+		const start = [walkWorld.x, walkWorld.y, walkWorld.z];
+
+		this.walkStartMode = false;
+		this._clearInfoPreview();
+
+		// La página guarda el inicio por nube y recarga el modo paseo (ver listener 'vr-set-walk-start').
+		document.dispatchEvent(new CustomEvent('vr-set-walk-start', { detail: { start } }));
+	}
+
 	_clearInfoPreview(){
 		if(this.infoPreviewMeasure){
 			this.viewer.scene.removeMeasurement(this.infoPreviewMeasure);
@@ -2817,8 +2946,21 @@ export class VRControls extends EventDispatcher{
 		if(this.infoPointMode){ this.infoPointMode = false; this._clearInfoPreview(); }
 		this.editClassTarget = { code, name: name || this._classNameForCode(code) };
 		this.editClassMode = true;
+		// Marca el punto del log donde empieza esta sesión: al salir (squeeze) exportamos solo
+		// los cambios hechos desde aquí.
+		this._reclassSessionStart = this.editClassLog.length;
 		this._clearEditClassPreview();
 		this._hideAllMenus();
+	}
+
+	// Termina la sesión de edición punto/spray: guarda automáticamente el .json con los puntos
+	// cambiados en esta sesión y limpia el estado de edición.
+	_finishEditClassSession(){
+		if(!this.editClassMode) return;
+		const entries = this.editClassLog.slice(this._reclassSessionStart || 0);
+		this._saveReclassJSON(this.reclassMode, this.editClassOrigin, this.editClassTarget, entries);
+		this.editClassMode = false;
+		this._clearEditClassPreview();
 	}
 
 	_clearEditClassPreview(){
@@ -3008,6 +3150,9 @@ export class VRControls extends EventDispatcher{
 			return;
 		}
 
+		// Marca dónde empiezan los cambios de esta operación de zona para exportarlos al terminar.
+		const logStart = this.editClassLog.length;
+
 		// AABBs en mundo (Box3) para cajas/esferas/cilindros (axis-aligned, sin rotación)
 		const aabbs = this.clipBoxes.map(({volume}) => {
 			const h = volume.scale.clone().multiplyScalar(0.5);
@@ -3070,6 +3215,8 @@ export class VRControls extends EventDispatcher{
 		}
 
 		console.log(`[EditClass] segmento: ${changed} puntos reclasificados a '${newName}'`);
+		this._saveReclassJSON('zona', this.editClassOrigin, { name: newName },
+			this.editClassLog.slice(logStart));
 		this.editClassSegmentMode = false;
 		this._showMenu(this.clipMenu);
 	}
@@ -3091,25 +3238,43 @@ export class VRControls extends EventDispatcher{
 		return inside;
 	}
 
-	_exportEditClassLog(){
-		if(this.editClassLog.length === 0){
-			console.log('[EditClass] no hay cambios para exportar');
+	// Guarda automáticamente un .json con los puntos reclasificados en una operación.
+	// `modalidad`: 'point' | 'spray' | 'zona'. `origen`: editClassOrigin ({any}|{realDefault}|{code,name}).
+	// `destino`: objeto con .name. `entries`: subconjunto de editClassLog de esta operación.
+	// Solo cuando el origen es 'Cualquiera' (any) se incluye la clase original de cada punto.
+	_saveReclassJSON(modalidad, origen, destino, entries){
+		if(!entries || entries.length === 0){
+			console.log('[EditClass] no hay cambios para guardar');
 			return;
 		}
-		const lines = this.editClassLog.map(e =>
-			`el punto en (${e.x.toFixed(4)}, ${e.y.toFixed(4)}, ${e.z.toFixed(4)}) cambió: classification '${e.fromName}' -> '${e.toName}'`
-		);
-		const text = lines.join('\n') + '\n';
-		const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+		const includeOriginal = !!(origen && origen.any === true);
+		const data = {
+			modalidad: modalidad,
+			claseOrigen: (origen && origen.name) ? origen.name : 'desconocido',
+			claseDestino: (destino && destino.name) ? destino.name : '',
+			fecha: new Date().toISOString(),
+			numPuntos: entries.length,
+			puntos: entries.map(e => {
+				const p = {
+					x: Number(e.x.toFixed(4)),
+					y: Number(e.y.toFixed(4)),
+					z: Number(e.z.toFixed(4)),
+				};
+				if(includeOriginal) p.claseOriginal = e.fromName;
+				return p;
+			}),
+		};
+		const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' });
 		const url = window.URL.createObjectURL(blob);
 		const stamp = new Date().toISOString().replace(/[:.]/g, '-');
 		const a = document.createElement('a');
 		a.href = url;
-		a.download = `edit_classification_log_${stamp}.txt`;
+		a.download = `reclasificacion_${modalidad}_${stamp}.json`;
 		document.body.appendChild(a);
 		a.click();
 		document.body.removeChild(a);
 		setTimeout(() => window.URL.revokeObjectURL(url), 1000);
+		console.log(`[EditClass] guardado ${a.download} (${entries.length} puntos)`);
 	}
 
 	// Reaplica los overrides al buffer de un nodo recién cargado/visible
@@ -3446,7 +3611,7 @@ export class VRControls extends EventDispatcher{
 	_updateActiveModes(delta, pointer){
 		// Reducir el tamaño de punto al mínimo mientras se colocan medidas, puntos de
 		// información o se edita clasificación, para apuntar con más precisión.
-		const placing = this.pointsMode || this.infoPointMode || this.editClassMode || this.polygonMode;
+		const placing = this.pointsMode || this.infoPointMode || this.editClassMode || this.polygonMode || this.walkStartMode;
 		if(placing && !this._placementShrinkActive){
 			this._shrinkPointSizeForPlacement();
 		}else if(!placing && this._placementShrinkActive){
@@ -3463,8 +3628,8 @@ export class VRControls extends EventDispatcher{
 			this._updatePolygonPreview(pointer);
 		}
 
-		// Preview del modo Punto de Info
-		if(this.infoPointMode && !(this.activeMenu && this.activeMenu.visible)){
+		// Preview del modo Punto de Info / Colocar inicio del Paseo (reutiliza la esfera fantasma)
+		if((this.infoPointMode || this.walkStartMode) && !(this.activeMenu && this.activeMenu.visible)){
 			const pos = this._raycastPointClouds(pointer);
 			if(pos){
 				if(!this.infoPreviewMeasure){
