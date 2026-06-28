@@ -366,6 +366,81 @@
     }
   }
 
+  // ───────────────────── Ventana de rendimiento (stats-gl), opcional ─────────────────────
+  // Panel FPS + CPU. Se controla desde el MENÚ DE VR (VRControls.js), no desde la barra lateral.
+  // La librería se carga de forma DIFERIDA (import() dentro de try/catch) solo al activarse, así
+  // que por defecto no se carga nada y no puede romper el arranque. El loop() del viewer ya llama
+  // this.stats.begin()/end(), así que basta con asignar/quitar viewer.stats. El menú VR conduce
+  // este módulo a través de la API global window.perfWindow (definida al final).
+  let perfStats = null;          // instancia stats-gl (se crea bajo demanda)
+  let perfStatsLoading = false;
+  let perfScale = 1;             // factor de tamaño (1 = 100%)
+  let perfVisible = false;       // estado actual (lo lee el toggle del menú VR)
+
+  function applyPerfScale() {
+    if (perfStats && perfStats.dom) {
+      perfStats.dom.style.transformOrigin = 'top right';
+      perfStats.dom.style.transform = 'scale(' + perfScale + ')';
+    }
+  }
+
+  // El loop() del bundle llama por frame this.stats.begin() … this.stats.end() (Potree original).
+  // begin() marca el inicio de CPU; mapeamos end → update() de stats-gl (cierra la CPU y refresca
+  // FPS+CPU en una sola pasada, sin doble conteo). try/catch como red de seguridad.
+  function attachPerfStats() {
+    viewer.stats = {
+      begin: () => { try { perfStats.begin();  } catch (e) {} },
+      end:   () => { try { perfStats.update(); } catch (e) { console.error('[Rendimiento] update:', e); } },
+    };
+  }
+
+  async function enablePerfWindow() {
+    perfVisible = true;
+    if (perfStats) {                                   // ya cargada → mostrar + reenganchar
+      perfStats.dom.style.display = '';
+      attachPerfStats();
+      applyPerfScale();
+      return;
+    }
+    if (perfStatsLoading) return;
+    perfStatsLoading = true;
+    try {
+      const { default: Stats } = await import('../libs/stats-gl/main.js');   // lazy, aislado
+      perfStats = new Stats({ trackFPS: true, trackGPU: false, trackHz: false,
+                              horizontal: false, logsPerSecond: 4, precision: 2 });
+      perfStats.dom.style.display = 'none';            // oculto hasta confirmar que sigue activado
+      document.body.appendChild(perfStats.dom);
+      perfStats.dom.style.left = 'auto';
+      perfStats.dom.style.right = '0px';               // esquina superior derecha
+      applyPerfScale();
+      if (perfVisible) { perfStats.dom.style.display = ''; attachPerfStats(); }  // pudo desactivarse mientras cargaba
+    } catch (e) {
+      console.error('[Rendimiento] no se pudo cargar stats-gl:', e);
+      perfVisible = false;
+    } finally {
+      perfStatsLoading = false;
+    }
+  }
+
+  function disablePerfWindow() {
+    perfVisible = false;
+    viewer.stats = null;                               // el loop deja de llamar begin/end/update (coste 0)
+    if (perfStats && perfStats.dom) perfStats.dom.style.display = 'none';
+  }
+
+  // API global que consume el menú de VR (VRControls.js) para mostrar/ocultar y redimensionar.
+  window.perfWindow = {
+    isVisible: () => perfVisible,
+    setVisible: (v) => { if (v) enablePerfWindow(); else disablePerfWindow(); },
+    getScale: () => perfScale,
+    setScale: (v) => { perfScale = v; applyPerfScale(); },
+    // El HUD 3D de VR (VRControls.js) lee estos canvas y los dibuja en un plano dentro del casco,
+    // porque el panel DOM no se renderiza en sesión inmersiva. Se actualizan solos vía perfStats.update().
+    getCanvases: () => (perfStats && perfStats.dom)
+      ? Array.from(perfStats.dom.querySelectorAll('canvas')).filter(c => c.width && c.height)
+      : [],
+  };
+
   // ───────────────────── Agregar nube de puntos (formulario en la barra lateral) ─────────────────────
   // Inyecta una nueva sección de acordeón en la barra lateral de Potree con un formulario HTML
   // nativo para que el usuario cargue su propia nube por URL (copiar/pegar nativo) y, opcionalmente,

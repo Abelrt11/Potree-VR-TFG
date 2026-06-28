@@ -87731,6 +87731,9 @@ ENDSEC
 			// Modo de reclasificación por apuntado: 'point' (punto por punto) | 'spray'
 			this.reclassMode = 'point';
 			this.reclassModeMenu = null;
+
+			this.perfMenu = null;               // submenú "Rendimiento" (toggle + slider de tamaño)
+			this.perfHUD = null;                // plano 3D que muestra el panel de stats DENTRO del casco
 			this.editClassSprayActive = false;  // true mientras se mantiene el gatillo en spray
 			this.editClassSprayRadius = 1.0;    // radio del pincel, en unidades de la nube (m). Mín 1.0 m (mostrado como 10 cm)
 			this.editClassBrushPreview = null;  // esfera de previsualización del pincel
@@ -87812,6 +87815,7 @@ ENDSEC
 			this._createClipShapeMenu();
 			this._createEditClassMenu();
 			this._createReclassModeMenu();
+			this._createPerfMenu();
 		}
 
 		_createVRMenu(){
@@ -87819,14 +87823,15 @@ ENDSEC
 			group.name = 'vr-mode-menu';
 			group.visible = false;
 
-			// Fondo del panel (ampliado para 8 botones)
+			// Fondo del panel (ampliado para una fila más: botón "Rendimiento")
 			const bgMat = new MeshBasicMaterial({
 				color: 0x0d1b2e,
 				transparent: true,
 				opacity: 0.88,
 				side: DoubleSide,
 			});
-			const bg = new Mesh(new PlaneGeometry(0.64, 1.10), bgMat);
+			const bg = new Mesh(new PlaneGeometry(0.64, 1.24), bgMat);
+			bg.position.set(0, -0.07, 0);
 			group.add(bg);
 
 			// Título
@@ -87876,7 +87881,11 @@ ENDSEC
 			btnWalkStart.position.set(0.17, -0.46, 0.002);
 			group.add(btnWalkStart);
 
-			group.userData.interactives = [btnWalk, btnGod, btnPoints, btnAppearance, btnAttribute, btnClip, btnChangeCloud, btnEditClass, btnAnomalies, btnWalkStart];
+			const btnPerf = this._createMenuButton('Opciones ventana\nde rendimiento', 'OPEN_PERF', { width: 0.42, canvasW: 360 });
+			btnPerf.position.set(0, -0.60, 0.002);
+			group.add(btnPerf);
+
+			group.userData.interactives = [btnWalk, btnGod, btnPoints, btnAppearance, btnAttribute, btnClip, btnChangeCloud, btnEditClass, btnAnomalies, btnWalkStart, btnPerf];
 			this.viewer.sceneVR.add(group);
 			this.mainMenu = group;
 			window.vrMenu = group;
@@ -88283,6 +88292,7 @@ ENDSEC
 			if(this.clipShapeMenu) this.clipShapeMenu.visible = false;
 			if(this.editClassMenu) this.editClassMenu.visible = false;
 			if(this.reclassModeMenu) this.reclassModeMenu.visible = false;
+			if(this.perfMenu) this.perfMenu.visible = false;
 			this.activeMenu = null;
 			this._setLaserLength(false);
 		}
@@ -88534,6 +88544,65 @@ ENDSEC
 
 			this.viewer.sceneVR.add(group);
 			this.appearanceMenu = group;
+		}
+
+		// Submenú "RENDIMIENTO": muestra/oculta la ventana de stats (FPS+CPU) y ajusta su tamaño.
+		// El panel en sí es un DOM gestionado por la página (window.perfWindow, en 1_ejemplo_profe.html);
+		// aquí solo está el control. El panel se ve en la pantalla espejo 2D, no dentro del casco.
+		_createPerfMenu(){
+			const group = new Group();
+			group.name = 'vr-perf-menu';
+			group.visible = false;
+
+			const bgMat = new MeshBasicMaterial({
+				color: 0x0d1b2e, transparent: true, opacity: 0.88, side: DoubleSide,
+			});
+			const bg = new Mesh(new PlaneGeometry(0.80, 0.66), bgMat);
+			bg.position.set(0, 0.04, 0);
+			group.add(bg);
+
+			const title = this._createMenuTitle('RENDIMIENTO');
+			title.scale.set(0.093, 0.093, 0.093);
+			title.position.set(0, 0.30, 0.002);
+			group.add(title);
+
+			const interactives = [];
+
+			// Acceso seguro a la API global de la página (puede no existir si se abre muy pronto).
+			const api = () => (typeof window !== 'undefined' ? window.perfWindow : null);
+
+			// Checkbox: mostrar/ocultar la ventana de rendimiento.
+			const toggleShow = this._createToggleWidget({
+				label: 'Mostrar ventana',
+				getValue: () => { const a = api(); return a ? !!a.isVisible() : false; },
+				setValue: (v) => { const a = api(); if(a) a.setVisible(v); },
+			});
+			toggleShow.group.position.set(0, 0.13, 0.002);
+			group.add(toggleShow.group);
+			interactives.push(...toggleShow.interactives);
+
+			// Slider: tamaño del panel (100%–300%). Escala vía CSS transform en la página.
+			const sliderSize = this._createSliderWidget({
+				label: 'Tamaño',
+				min: 1, max: 3, step: 0.1,
+				getValue: () => { const a = api(); return a ? a.getScale() : 1; },
+				setValue: (v) => { const a = api(); if(a) a.setScale(v); },
+				valueFormat: (v) => Math.round(v * 100) + '%',
+			});
+			sliderSize.group.position.set(0, -0.02, 0.002);
+			group.add(sliderSize.group);
+			interactives.push(...sliderSize.interactives);
+
+			// Botón Volver
+			const btnBack = this._createMenuButton('← Volver', 'BACK_TO_MAIN');
+			btnBack.position.set(0, -0.22, 0.002);
+			group.add(btnBack);
+			interactives.push(btnBack);
+
+			group.userData.interactives = interactives;
+
+			this.viewer.sceneVR.add(group);
+			this.perfMenu = group;
 		}
 
 		_createMeasureMenu(){
@@ -89183,6 +89252,10 @@ ENDSEC
 					// Navegación entre menús
 					if(ud.modeId === 'OPEN_APPEARANCE'){
 						this._showMenu(this.appearanceMenu);
+						return;
+					}
+					if(ud.modeId === 'OPEN_PERF'){
+						this._showMenu(this.perfMenu);
 						return;
 					}
 					if(ud.modeId === 'BACK_TO_MAIN'){
@@ -90762,7 +90835,86 @@ ENDSEC
 			else v.scale.z = newSize;
 		}
 
+		// HUD 3D de rendimiento para VR: el panel de stats es DOM (lo gestiona la página vía
+		// window.perfWindow) y no se ve dentro del casco; aquí se vuelcan sus canvas (FPS/CPU) en un
+		// plano anclado a la cabeza. Visibilidad y tamaño los controla el submenú "Rendimiento".
+		_createPerfHUD(){
+			const canvas = document.createElement('canvas');
+			canvas.width = 340;
+			canvas.height = 100;
+			const ctx = canvas.getContext('2d');
+
+			const texture = new CanvasTexture(canvas);
+			texture.minFilter = LinearFilter;
+			texture.magFilter = LinearFilter;
+
+			const material = new MeshBasicMaterial({
+				map: texture, transparent: true, depthTest: false, depthWrite: false, side: DoubleSide,
+			});
+			const mesh = new Mesh(new PlaneGeometry(0.34, 0.34 * canvas.height / canvas.width), material);
+			mesh.name = 'vr-perf-hud';
+			mesh.renderOrder = 1000;
+			mesh.frustumCulled = false;
+			this.viewer.sceneVR.add(mesh);
+
+			this.perfHUD = mesh;
+			this.perfHUDCanvas = canvas;
+			this.perfHUDCtx = ctx;
+			this.perfHUDTexture = texture;
+			this._perfHudFakeCam = new PerspectiveCamera();
+			this._perfHudBaseWidth = 0;
+		}
+
+		_updatePerfHUD(){
+			const pw = (typeof window !== 'undefined') ? window.perfWindow : null;
+			const presenting = this.viewer.renderer.xr.isPresenting;
+			if(!pw || !pw.isVisible || !pw.isVisible() || !presenting || !this.viewer.sceneVR){
+				if(this.perfHUD) this.perfHUD.visible = false;
+				return;
+			}
+			const panels = pw.getCanvases ? pw.getCanvases() : [];
+			if(panels.length === 0){ if(this.perfHUD) this.perfHUD.visible = false; return; }
+
+			if(!this.perfHUD) this._createPerfHUD();
+			this.perfHUD.visible = true;
+
+			// Anclar a la cabeza: delante de la cámara VR, desplazado a la esquina inferior izquierda
+			// y orientado como billboard (mismo patrón que _positionMenuInFrontOfCamera).
+			const camVR = this.viewer.renderer.xr.getCamera(this._perfHudFakeCam);
+			const pos = camVR.getWorldPosition(new Vector3());
+			const quat = camVR.getWorldQuaternion(new Quaternion());
+			const offset = new Vector3(-0.26, -0.16, -1.0).applyQuaternion(quat);
+			this.perfHUD.position.copy(pos).add(offset);
+			this.perfHUD.quaternion.copy(quat);
+
+			// Volcar cada canvas (FPS/CPU) en fila sobre el canvas compuesto; se redimensiona el plano
+			// según el slider (window.perfWindow.getScale()). Solo recrea geometría cuando cambia algo.
+			const canvas = this.perfHUDCanvas, ctx = this.perfHUDCtx;
+			const pad = 6, targetH = 88;
+			let totalW = pad;
+			const draws = [];
+			for(const p of panels){ const w = targetH * (p.width / p.height); draws.push({ p, x: totalW, w }); totalW += w + pad; }
+			const needW = Math.max(1, Math.ceil(totalW));
+			const needH = targetH + 2 * pad;
+			const scale = pw.getScale ? pw.getScale() : 1;
+			const baseWidth = 0.34 * scale;     // ancho físico del plano (m), escalado por el slider
+			if(canvas.width !== needW || canvas.height !== needH || this._perfHudBaseWidth !== baseWidth){
+				canvas.width = needW;
+				canvas.height = needH;
+				this._perfHudBaseWidth = baseWidth;
+				this.perfHUD.geometry.dispose();
+				this.perfHUD.geometry = new PlaneGeometry(baseWidth, baseWidth * (needH / needW));
+			}
+			ctx.clearRect(0, 0, canvas.width, canvas.height);
+			ctx.fillStyle = 'rgba(13, 27, 46, 0.85)';
+			ctx.fillRect(0, 0, canvas.width, canvas.height);
+			for(const d of draws){ try { ctx.drawImage(d.p, d.x, pad, d.w, targetH); } catch(e) { /* canvas aún sin contenido */ } }
+			this.perfHUDTexture.needsUpdate = true;
+		}
+
 		update(delta){
+			this._updatePerfHUD();   // HUD de rendimiento anclado a la cabeza (solo activo en VR)
+
 			const rightCtrl = this._getRightController();
 			const pointer = rightCtrl || this.cPrimary;
 
