@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Potree VR - Selector</title>
+  <title>Potree VR</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -22,65 +22,29 @@
       font-weight: 300;
       letter-spacing: 0.05em;
     }
-    .cards {
-      display: grid;
-      grid-template-columns: repeat(2, 280px);
-      gap: 20px;
-    }
-    .card {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
+    .start-btn {
+      display: inline-block;
+      color: #e6edf3;
       background: #21262d;
       border: 1px solid #30363d;
       border-radius: 12px;
-      padding: 32px 24px;
+      padding: 20px 64px;
+      font-size: 1.3rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
       text-decoration: none;
+      cursor: pointer;
       transition: border-color 0.2s, transform 0.2s, background 0.2s;
     }
-    .card:hover {
+    .start-btn:hover {
       border-color: #58a6ff;
       background: #2d333b;
       transform: translateY(-3px);
     }
-    .card-title {
-      color: #e6edf3;
-      font-size: 1.1rem;
-      font-weight: 600;
-    }
-    .card-desc {
-      color: #8b949e;
-      font-size: 0.85rem;
-    }
   </style>
 </head>
 <body>
-  <h1>Selecciona una nube de puntos</h1>
-  <div class="cards">
-    <a class="card" href="examples/1_ejemplo_profe.html">
-      <span class="card-title">Tramo A</span>
-      <span class="card-desc">Nube de puntos &mdash; 563.4 MB</span>
-    </a>
-    <a class="card" href="examples/2_ejemplo_profe.html">
-      <span class="card-title">Tramo B</span>
-      <span class="card-desc">Nube de puntos &mdash; 467.58 MB</span>
-    </a>
-    <a class="card" href="examples/3_ejemplo_profe.html">
-      <span class="card-title">Tramo C</span>
-      <span class="card-desc">Nube de puntos &mdash; 498.86 MB</span>
-    </a>
-    <a class="card" href="examples/5_ejemplo_profe.html">
-      <span class="card-title">Tramo D</span>
-      <span class="card-desc">Nube de puntos &mdash; 672.63 MB</span>
-    </a>
-    <a class="card" href="examples/corredor_ejemplo.html">
-      <span class="card-title">Corredor (A+B+C)</span>
-      <span class="card-desc">Nube combinada &mdash; corredor completo</span>
-    </a>
-    <a class="card" href="examples/anomalias_ejemplo.html">
-      <span class="card-title">Red Eléctrica con Anomalías</span>
-      <span class="card-desc">Nube de puntos &mdash; visión de anomalías (319 MB)</span>
-    </a>
-  </div>
+  <h1>Potree VR</h1>
+  <a class="start-btn" href="examples/1_ejemplo_profe.html">Empezar</a>
 </body>
 </html>
