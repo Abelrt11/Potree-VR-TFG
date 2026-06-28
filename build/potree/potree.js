@@ -90765,14 +90765,23 @@ ENDSEC
 			if(!handle || !handle.userData) return;
 			const entry = handle.userData.entry;
 			if(handle.userData.role === 'center'){
-				// Drag de mover: captura origen del rayo del mando + posición inicial del volumen
+				// Drag de mover (agarre por rayo): captura la distancia de la figura a lo largo
+				// del rayo y el desfase perpendicular. Así la figura sigue el láser manteniendo
+				// la distancia de agarre, tanto en VR (cambian origen+dirección al mover la mano)
+				// como en escritorio (solo cambia la dirección al mover el ratón).
 				const ctrl = controller || this._getRightController() || this.cPrimary;
 				const ray = this._clipPointerRay(ctrl);
-				const initialRayOrigin = ray ? ray.origin.clone() : new Vector3();
+				let grabDist = 1;
+				let offset = new Vector3();
+				if(ray){
+					const toVol = entry.volume.position.clone().sub(ray.origin);
+					grabDist = Math.max(toVol.dot(ray.direction), 1e-3); // mantener delante del puntero
+					offset = toVol.sub(ray.direction.clone().multiplyScalar(grabDist));
+				}
 				this._clipDragging = {
 					entry, kind: 'center',
-					initialRayOrigin,
-					initialVolPos: entry.volume.position.clone(),
+					grabDist,
+					offset,
 				};
 			}else {
 				this._clipDragging = { entry, kind: 'axis', axisIndex: handle.userData.axisIndex };
@@ -90808,9 +90817,12 @@ ENDSEC
 			const v = drag.entry.volume;
 
 			if(drag.kind === 'center'){
-				// Mover: la posición del volumen sigue el rayo del mando con el offset capturado
-				// al iniciar el arrastre (patrón "grab + relative motion").
-				v.position.copy(drag.initialVolPos).add(ray.origin).sub(drag.initialRayOrigin);
+				// Mover: recolocar la figura sobre el rayo actual a la distancia de agarre
+				// capturada, más el desfase perpendicular (patrón "laser grab"). La figura sigue
+				// el puntero en VR y en escritorio.
+				v.position.copy(ray.origin)
+					.addScaledVector(ray.direction, drag.grabDist)
+					.add(drag.offset);
 				return;
 			}
 
