@@ -498,6 +498,7 @@ export class VRControls extends EventDispatcher{
 		this._clipDragging = null;    // { entry, kind:'axis'|'center', ... } durante el arrastre
 		this._clipHovered = null;     // tirador resaltado
 		this.clipShape = 'box';       // 'box' | 'cylinder' | 'sphere' — forma a colocar
+		this._clipPlaceArmed = false; // coloca una sola figura por selección de menú; se desarma tras colocar
 		this.clipShapeMenu = null;    // submenú "FORMA DE ZONA" abierto desde Delimitar Zonas
 
 		// Recorte por polígono dibujado a mano (prisma recto en la dirección de la vista)
@@ -1136,13 +1137,14 @@ export class VRControls extends EventDispatcher{
 		console.log(`[VRMenu] cam=(${pos.x.toFixed(2)},${pos.y.toFixed(2)},${pos.z.toFixed(2)}) menu=(${menuPos.x.toFixed(2)},${menuPos.y.toFixed(2)},${menuPos.z.toFixed(2)})`);
 	}
 
-	_createSliderWidget({label, min, max, step, getValue, setValue, valueFormat}){
+	_createSliderWidget({label, min, max, step, getValue, setValue, valueFormat, labelScale}){
 		valueFormat = valueFormat || ((v) => v.toFixed(0));
+		labelScale = labelScale || 0.05;
 
 		const group = new THREE.Group();
 
-		const labelSprite = new Potree.TextSprite(`${label}: ${valueFormat(getValue())}`);
-		labelSprite.scale.set(0.07, 0.07, 0.07);
+		const labelSprite = this._createMenuTitle(`${label}: ${valueFormat(getValue())}`);
+		labelSprite.scale.set(labelScale, labelScale, labelScale);
 		labelSprite.position.set(0, 0.055, 0.001);
 		group.add(labelSprite);
 
@@ -1195,11 +1197,12 @@ export class VRControls extends EventDispatcher{
 		return { group, interactives: [handle, btnMinus, btnPlus] };
 	}
 
-	_createToggleWidget({label, getValue, setValue}){
+	_createToggleWidget({label, getValue, setValue, labelScale}){
+		labelScale = labelScale || 0.05;
 		const group = new THREE.Group();
 
-		const labelSprite = new Potree.TextSprite(label);
-		labelSprite.scale.set(0.07, 0.07, 0.07);
+		const labelSprite = this._createMenuTitle(label);
+		labelSprite.scale.set(labelScale, labelScale, labelScale);
 		labelSprite.position.set(0.075, 0, 0.001);
 		group.add(labelSprite);
 
@@ -1254,13 +1257,13 @@ export class VRControls extends EventDispatcher{
 		const bgMat = new THREE.MeshBasicMaterial({
 			color: 0x0d1b2e, transparent: true, opacity: 0.88, side: THREE.DoubleSide,
 		});
-		const bg = new THREE.Mesh(new THREE.PlaneGeometry(0.80, 1.04), bgMat);
+		const bg = new THREE.Mesh(new THREE.PlaneGeometry(0.80, 1.22), bgMat);
 		bg.position.set(0, 0.13, 0);
 		group.add(bg);
 
 		const title = this._createMenuTitle('APARIENCIA');
-		title.scale.set(0.093, 0.093, 0.093);
-		title.position.set(0, 0.60, 0.002);
+		title.scale.set(0.11, 0.11, 0.11);
+		title.position.set(0, 0.62, 0.002);
 		group.add(title);
 
 		const interactives = [];
@@ -1272,15 +1275,16 @@ export class VRControls extends EventDispatcher{
 			getValue: () => this.viewer.getPointBudget(),
 			setValue: (v) => this.viewer.setPointBudget(v),
 			valueFormat: (v) => (v / 1000000).toFixed(1) + 'M',
+			labelScale: 0.065,
 		});
-		sliderPB.group.position.set(0, 0.45, 0.002);
+		sliderPB.group.position.set(0, 0.46, 0.002);
 		group.add(sliderPB.group);
 		interactives.push(...sliderPB.interactives);
 
 		// Sección: Fondo
-		const fondoLabel = new Potree.TextSprite('FONDO');
-		fondoLabel.scale.set(0.07, 0.07, 0.07);
-		fondoLabel.position.set(0, 0.32, 0.002);
+		const fondoLabel = this._createMenuTitle('FONDO');
+		fondoLabel.scale.set(0.065, 0.065, 0.065);
+		fondoLabel.position.set(0, 0.34, 0.002);
 		group.add(fondoLabel);
 
 		const radioFondo = this._createRadioGroupWidget({
@@ -1293,7 +1297,7 @@ export class VRControls extends EventDispatcher{
 			getValue: () => this.viewer.getBackground(),
 			setValue: (v) => this.viewer.setBackground(v),
 		});
-		radioFondo.group.position.set(0, 0.16, 0.002);
+		radioFondo.group.position.set(0, 0.20, 0.002);
 		group.add(radioFondo.group);
 		interactives.push(...radioFondo.interactives);
 
@@ -1305,8 +1309,9 @@ export class VRControls extends EventDispatcher{
 			getValue: () => { const pc = this.viewer.scene.pointclouds[0]; return pc ? pc.material.size : 1; },
 			setValue: (v) => { for(const pc of this.viewer.scene.pointclouds){ if(pc && pc.material) pc.material.size = v; } },
 			valueFormat: (v) => v.toFixed(2),
+			labelScale: 0.065,
 		});
-		sliderPointSize.group.position.set(0, -0.01, 0.002);
+		sliderPointSize.group.position.set(0, -0.05, 0.002);
 		group.add(sliderPointSize.group);
 		interactives.push(...sliderPointSize.interactives);
 
@@ -1315,14 +1320,15 @@ export class VRControls extends EventDispatcher{
 			label: 'Box',
 			getValue: () => this.viewer.getShowBoundingBox(),
 			setValue: (v) => this.viewer.setShowBoundingBox(v),
+			labelScale: 0.065,
 		});
-		toggleBox.group.position.set(0, -0.09, 0.002);
+		toggleBox.group.position.set(0, -0.20, 0.002);
 		group.add(toggleBox.group);
 		interactives.push(...toggleBox.interactives);
 
 		// Botón Volver
 		const btnBack = this._createMenuButton('← Volver', 'BACK_TO_MAIN');
-		btnBack.position.set(0, -0.23, 0.002);
+		btnBack.position.set(0, -0.34, 0.002);
 		group.add(btnBack);
 		interactives.push(btnBack);
 
@@ -1359,7 +1365,7 @@ export class VRControls extends EventDispatcher{
 		group.add(bg);
 
 		const title = this._createMenuTitle('RENDIMIENTO');
-		title.scale.set(0.093, 0.093, 0.093);
+		title.scale.set(0.11, 0.11, 0.11);
 		title.position.set(0, 0.30, 0.002);
 		group.add(title);
 
@@ -1373,6 +1379,7 @@ export class VRControls extends EventDispatcher{
 			label: 'Mostrar ventana',
 			getValue: () => { const a = api(); return a ? !!a.isVisible() : false; },
 			setValue: (v) => { const a = api(); if(a) a.setVisible(v); },
+			labelScale: 0.065,
 		});
 		toggleShow.group.position.set(0, 0.13, 0.002);
 		group.add(toggleShow.group);
@@ -1385,6 +1392,7 @@ export class VRControls extends EventDispatcher{
 			getValue: () => { const a = api(); return a ? a.getScale() : 1; },
 			setValue: (v) => { const a = api(); if(a) a.setScale(v); },
 			valueFormat: (v) => Math.round(v * 100) + '%',
+			labelScale: 0.065,
 		});
 		sliderSize.group.position.set(0, -0.02, 0.002);
 		group.add(sliderSize.group);
@@ -1503,7 +1511,7 @@ export class VRControls extends EventDispatcher{
 		group.add(bg);
 
 		const title = this._createMenuTitle('CLIP TASK');
-		title.scale.set(0.093, 0.093, 0.093);
+		title.scale.set(0.11, 0.11, 0.11);
 		title.position.set(0, 0.24, 0.002);
 		group.add(title);
 
@@ -1581,7 +1589,7 @@ export class VRControls extends EventDispatcher{
 		group.add(bg);
 
 		const title = this._createMenuTitle('RECLASIFICAR');
-		title.scale.set(0.093, 0.093, 0.093);
+		title.scale.set(0.11, 0.11, 0.11);
 		title.position.set(0, 0.32, 0.002);
 		group.add(title);
 
@@ -1602,6 +1610,7 @@ export class VRControls extends EventDispatcher{
 			getValue: () => this.editClassSprayRadius * 10,
 			setValue: (cm) => { this.editClassSprayRadius = cm / 10; },
 			valueFormat: (v) => v.toFixed(0) + ' cm',
+			labelScale: 0.065,
 		});
 		sliderRadius.group.position.set(0, -0.17, 0.002);
 		group.add(sliderRadius.group);
@@ -1627,7 +1636,7 @@ export class VRControls extends EventDispatcher{
 		group.add(bg);
 
 		const title = this._createMenuTitle('ATRIBUTO');
-		title.scale.set(0.093, 0.093, 0.093);
+		title.scale.set(0.11, 0.11, 0.11);
 		title.position.set(0, 0.88, 0.002);
 		group.add(title);
 
@@ -1852,6 +1861,7 @@ export class VRControls extends EventDispatcher{
 				getValue: () => { const pc = this.viewer.scene.pointclouds[0]; return pc ? pc.material[prop] : def; },
 				setValue: (v) => { for(const pc of this.viewer.scene.pointclouds) pc.material[prop] = v; },
 				valueFormat: (v) => v.toFixed(2),
+				labelScale: 0.065,
 			});
 			const rows = [
 				{ w: mk('Gamma',     p.g,  0, 4, 1), y:  0.00 },
@@ -1914,8 +1924,8 @@ export class VRControls extends EventDispatcher{
 		};
 		group.add(cb);
 
-		const label = new Potree.TextSprite(cls.name || ('clase ' + code));
-		label.scale.set(0.135, 0.135, 0.135);
+		const label = this._createMenuTitle(cls.name || ('clase ' + code));
+		label.scale.set(0.097, 0.097, 0.097);
 		label.position.set(0, 0, 0.001);
 		group.add(label);
 
@@ -2255,8 +2265,9 @@ export class VRControls extends EventDispatcher{
 		if(this.clipMode){
 			if(this._clipHovered){
 				this._beginAxisDrag(this._clipHovered, controller);
-			}else{
+			}else if(this._clipPlaceArmed){
 				this._placeClipBox(controller);
+				this._clipPlaceArmed = false;   // una sola figura por selección de menú (evita colocar de más)
 			}
 			return;
 		}
@@ -3382,6 +3393,7 @@ export class VRControls extends EventDispatcher{
 	_startClipMode(){
 		if(this.pointsMode) this._finishMeasurement();
 		this.clipMode = true;
+		this._clipPlaceArmed = true;  // un disparo colocará una sola figura; luego se desarma
 		this._clipDragging = null;
 		this._clipHovered = null;
 		this._ensureClipHandleGroup();
@@ -3391,6 +3403,7 @@ export class VRControls extends EventDispatcher{
 	}
 
 	_finishClipMode(){
+		this._clipPlaceArmed = false;
 		this._clipDragging = null;
 		if(this._clipHovered && this._clipHovered.material){
 			this._clipHovered.material.color.setHex(this._clipHovered.userData.baseColor);
@@ -3420,27 +3433,28 @@ export class VRControls extends EventDispatcher{
 		const ray = this._clipPointerRay(controller);
 		if(!ray) return;
 
-		// Tamaño por defecto: ~10% de la diagonal LOCAL de la nube (SIN la escala de
-		// visualización). En modo Paseo la nube se renderiza con scale=10; al no
-		// multiplicar por esa escala, el cubo en unidades de mundo queda ~10× menor
-		// respecto a la nube renderizada → tamaño cómodo (en Aéreo, scale=1, igual que antes).
-		const pc = this.viewer.scene.pointclouds[0];
-		let diag = 10;
-		if(pc && pc.boundingBox){
-			const size = pc.boundingBox.getSize(new THREE.Vector3());
-			diag = size.length();
-		}
-		const edge = Math.max(diag * 0.18, 1e-3);
-
 		// Posición: intersección con la nube; si no hay, a unos pocos lados delante del mando
 		let pos = this._raycastPointClouds(controller);
-		if(!pos){
-			pos = ray.origin.clone().addScaledVector(ray.direction, edge * 5);
-		}else{
+		let edge;
+		if(pos){
+			// Tamaño = ~3/4 de la distancia del usuario (mando) al punto seleccionado, de
+			// modo que apuntar lejos crea figuras grandes y apuntar cerca, pequeñas.
+			const dist = pos.distanceTo(ray.origin);
+			edge = Math.max(dist * 0.75, 1e-3);
 			// Desplazar la caja hacia el observador a lo largo del rayo para que no quede
 			// medio enterrada: el punto apuntado queda en su tercio trasero, pero dentro de
 			// la caja, de modo que sigue encerrando el volumen de puntos de la superficie.
 			pos.addScaledVector(ray.direction, -edge * 0.3);
+		}else{
+			// Sin punto de nube apuntado: tamaño por defecto ~18% de la diagonal de la nube
+			// (en unidades de mundo) y colocación a unos lados delante del mando.
+			const pc = this.viewer.scene.pointclouds[0];
+			let diag = 10;
+			if(pc && pc.boundingBox){
+				diag = pc.boundingBox.getSize(new THREE.Vector3()).length();
+			}
+			edge = Math.max(diag * 0.18, 1e-3);
+			pos = ray.origin.clone().addScaledVector(ray.direction, edge * 5);
 		}
 
 		const shape = this.clipShape || 'box';
@@ -3496,11 +3510,11 @@ export class VRControls extends EventDispatcher{
 				entry.handles.push(mesh);
 			}
 		}
-		// Tirador central (blanco) para MOVER el volumen entero
-		const centerMat = new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false, depthWrite: false });
+		// Tirador central (naranja) para MOVER el volumen entero; se resalta en blanco al apuntarlo
+		const centerMat = new THREE.MeshBasicMaterial({ color: 0xff8000, depthTest: false, depthWrite: false });
 		const centerMesh = new THREE.Mesh(geo, centerMat);
 		centerMesh.renderOrder = 10;
-		centerMesh.userData = { kind: 'cliphandle', role: 'center', entry, baseColor: 0xffffff };
+		centerMesh.userData = { kind: 'cliphandle', role: 'center', entry, baseColor: 0xff8000 };
 		if(this._clipHandleGroup) this._clipHandleGroup.add(centerMesh);
 		entry.handles.push(centerMesh);
 	}
