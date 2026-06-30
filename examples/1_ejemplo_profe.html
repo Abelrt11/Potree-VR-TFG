@@ -144,7 +144,7 @@
   viewer.renderer.xr.enabled = true;
   viewer.renderer.xr.setReferenceSpaceType('local-floor');
   viewer.setEDLEnabled(true);
-  viewer.setFOV(60);  // FOV más amplio para sensación más inmersiva
+  viewer.setFOV(60);  
   viewer.setPointBudget(10_000_000);
 
   viewer.setDescription(`Walker Mode: Experience the point cloud from ground level.
@@ -165,7 +165,6 @@
     }
     if (e.key === "1") {
       if (viewer.vrControls) viewer.vrControls.toggleMenu();
-      else console.log("[VRMenu] vrControls no disponible aún");
     }
     if (e.key === "3") { // prueba en escritorio: alternar visión de anomalías
       const next = !window.anomaliesWanted;
@@ -193,7 +192,7 @@
     // Nube propia del usuario: localizarla en el registro y activarla.
     if (String(id).startsWith('custom')) {
       const entry = (window.customClouds || []).find(c => c.id === id);
-      if (!entry) { console.warn('[CustomCloud] no encontrada en el registro:', id); return; }
+      if (!entry) return;
       window.customCloud = { url: entry.url, start: entry.start };
     }
     cloudIndex = id;
@@ -220,7 +219,6 @@
       viewer.setClipTask(Potree.ClipTask.HIGHLIGHT);
       viewer.setClipMethod(Potree.ClipMethod.INSIDE_ANY);
     }
-    console.log('[Anomalías] toggle=' + e.detail.active + ' volúmenes=' + vols.length);
   });
 
   // Cartel de sendero (scene.scene): en escritorio con EDL hay que redibujarlo en el overlay
@@ -233,17 +231,10 @@
     }
   });
 
-  /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  /////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+  // ───────────────────── Carga y cambio de modo de las nubes ─────────────────────
 
   function changeViewmode() {
     viewmode = viewmode === 1 ? 2 : 1;
-    console.log("viewmode", viewmode);
     loadCloudMode(viewmode);
   }
   function clearPointClouds() {
@@ -279,6 +270,85 @@
     }
   }
 
+  // ───────────────────── Helpers de carga de nube ─────────────────────
+  function worldBBox(pcs) {
+    let union = null;
+    for (const pc of pcs) {
+      pc.updateMatrixWorld(true);
+      const b = pc.boundingBox.clone().applyMatrix4(pc.matrixWorld);
+      union = union ? union.union(b) : b;
+    }
+    return union;
+  }
+
+  // Añade una nube a la escena con tamaño de punto según el modo (aéreo 1 / paseo 0.5).
+  function addCloud(pc, viewmode) {
+    pc.material.pointSizeType = Potree.PointSizeType.ADAPTIVE;
+    pc.material.size = (viewmode === 1) ? 1 : 0.5;
+    viewer.scene.addPointCloud(pc);
+  }
+
+  // Modo Aéreo: encuadra la cámara en diagonal sobre el bbox (mundo) de las nubes.
+  function frameGodView(pcs) {
+    const bbox = worldBBox(pcs);
+    const center = bbox.getCenter(new THREE.Vector3());
+    const size = bbox.getSize(new THREE.Vector3());
+    const distance = Math.max(size.x, size.y, size.z) * 1.2;
+
+    const camPos = new THREE.Vector3(center.x + distance, center.y - distance, center.z + distance);
+    viewer.scene.view.position.copy(camPos);
+    viewer.scene.view.lookAt(center);
+
+    const cam = viewer.scene.getActiveCamera();
+    cam.near = Math.max(0.1, distance / 1000);
+    cam.far = distance * 20;
+    cam.updateProjectionMatrix();
+    viewer.setMoveSpeed(distance / 5);
+  }
+
+  // Modo Paseo: escala las nubes x10 respecto a un pivote común (la primera), conservando el teselado.
+  function scaleWalkX10(pcs) {
+    const pivot = pcs[0].position.clone();
+    for (const pc of pcs) {
+      const off = pc.position.clone();
+      pc.scale.set(10, 10, 10);
+      pc.position.set(10 * off.x - 9 * pivot.x, 10 * off.y - 9 * pivot.y, 10 * off.z - 9 * pivot.z);
+      pc.updateMatrix();
+    }
+  }
+
+  // Modo Paseo: sitúa la cámara en camPos mirando al frente (+Y).
+  function walkLookAt(camPos) {
+    viewer.scene.view.position.copy(camPos);
+    const lookAtPos = camPos.clone();
+    lookAtPos.y += 1;
+    viewer.scene.view.lookAt(lookAtPos);
+    viewer.setMoveSpeed(10);
+  }
+
+  // Carga varias nubes que comparten coordenadas (corredor): aéreo encuadra la unión; paseo
+  // las escala x10 con pivote común y entra en walkCamPos.
+  function loadMultiCloud(urls, viewmode, walkCamPos) {
+    clearPointClouds();
+    if (viewmode === 2) viewer.setControls(new Potree.FirstPersonControls(viewer));
+    Promise.all(urls.map(u => Potree.loadPointCloud(u))).then(results => {
+      const pcs = results.map(r => r.pointcloud);
+      pcs.forEach(pc => addCloud(pc, viewmode));
+      if (viewmode === 1) {
+        frameGodView(pcs);
+      } else {
+        scaleWalkX10(pcs);
+        const size = worldBBox(pcs).getSize(new THREE.Vector3());
+        const cam = viewer.scene.getActiveCamera();
+        cam.near = 0.1;
+        cam.far = Math.max(size.x, size.y, size.z) * 10;
+        cam.updateProjectionMatrix();
+        walkLookAt(walkCamPos);
+      }
+      syncVRToScene();
+    });
+  }
+
   function loadCloudMode(viewmode) {
     if (cloudIndex === 'corredor') { loadCorridorCloud(viewmode); return; }
     if (cloudIndex === 'gran_corredor') { loadGranCorridorCloud(viewmode); return; }
@@ -286,92 +356,36 @@
     if (cloudIndex === 'anomalias') { loadAnomaliesCloud(viewmode); return; }
     if (String(cloudIndex).startsWith('custom')) { loadCustomCloud(viewmode); return; }
     clearPointClouds();
-    switch (viewmode) {
+    if (viewmode === 2) viewer.setControls(new Potree.FirstPersonControls(viewer));
 
-      case 1: //Aerial mode
-        Potree.loadPointCloud(getCloudUrl(cloudIndex)).then(e => {
-          let pointcloud = e.pointcloud;
-          let material = e.pointcloud.material;
-          material.size = 1;
-          material.pointSizeType = Potree.PointSizeType.ADAPTIVE;
-          viewer.scene.addPointCloud(pointcloud);
+    Potree.loadPointCloud(getCloudUrl(cloudIndex)).then(e => {
+      const pointcloud = e.pointcloud;
+      addCloud(pointcloud, viewmode);
 
-          // Forzar que matrixWorld esté actualizado antes de transformar el bbox
-          pointcloud.updateMatrixWorld(true);
+      if (viewmode === 1) {
+        frameGodView([pointcloud]);
+      } else {
+        scaleWalkX10([pointcloud]);
+        // far según la extensión propia de la nube (bbox local, sin escalar).
+        const size = pointcloud.boundingBox.getSize(new THREE.Vector3());
+        const cam = viewer.scene.getActiveCamera();
+        cam.near = 0.1;
+        cam.far = Math.max(size.x, size.y, size.z) * 10;
+        cam.updateProjectionMatrix();
 
-          // Transformar el boundingBox local de la nube a coordenadas mundo (UTM)
-          let bbox = pointcloud.boundingBox.clone();
-          bbox.applyMatrix4(pointcloud.matrixWorld);
-
-          let center = bbox.getCenter(new THREE.Vector3());
-          let size = bbox.getSize(new THREE.Vector3());
-          let distance = Math.max(size.x, size.y, size.z) * 1.2;
-
-          console.log(`[God] center=(${center.x.toFixed(0)},${center.y.toFixed(0)},${center.z.toFixed(0)}) size=(${size.x.toFixed(0)},${size.y.toFixed(0)},${size.z.toFixed(0)}) dist=${distance.toFixed(0)}`);
-
-          // Cámara diagonal arriba/atrás (Z = arriba en este sistema)
-          let camPos = new THREE.Vector3(
-            center.x + distance,
-            center.y - distance,
-            center.z + distance
-          );
-          viewer.scene.view.position.copy(camPos);
-          viewer.scene.view.lookAt(center);
-
-          viewer.scene.getActiveCamera().near = Math.max(0.1, distance / 1000);
-          viewer.scene.getActiveCamera().far = distance * 20;
-          viewer.scene.getActiveCamera().updateProjectionMatrix();
-
-          viewer.setMoveSpeed(distance / 5);
-          syncVRToScene();
-        });
-
-        break;
-      case 2: //walker mode
-        viewer.setControls(new Potree.FirstPersonControls(viewer));
-        Potree.loadPointCloud(getCloudUrl(cloudIndex)).then(e => {
-          let pointcloud = e.pointcloud;
-          let material = e.pointcloud.material;
-          material.size = 0.5;
-          material.pointSizeType = Potree.PointSizeType.ADAPTIVE;
-          viewer.scene.addPointCloud(pointcloud);
-          pointcloud.scale.set(10, 10, 10);
-          pointcloud.updateMatrix();
-
-          let bbox = pointcloud.boundingBox;
-          let size = bbox.getSize(new THREE.Vector3());
-
-          viewer.scene.getActiveCamera().near = 0.1;
-          viewer.scene.getActiveCamera().far = Math.max(size.x, size.y, size.z) * 10;
-          viewer.scene.getActiveCamera().updateProjectionMatrix();
-
-          let walkerCoords;
-          switch(cloudIndex) {
-            case 2:  walkerCoords = [426768.400, 4478215.481, 835.360  + 20.7]; break;
-            case 3:  walkerCoords = [424328.211, 4476365.500, 785.870  + 20.7]; break;
-            case 5:  walkerCoords = [425538.371, 4474447.171, 854.129  + 20.7]; break;
-            default: walkerCoords = [426808.02,  4478030.49,  1034.87  + 20.7]; break;
-          }
-          let camPos = new THREE.Vector3(...walkerCoords);
-          viewer.scene.view.position.copy(camPos);
-
-          let lookAtPos = camPos.clone();
-          lookAtPos.y += 1;
-          viewer.scene.view.lookAt(lookAtPos);
-          viewer.setMoveSpeed(10);
-          syncVRToScene();
-        });
-
-        break;
-    }
+        const walkerCoords = {
+          2: [426768.400, 4478215.481, 835.360 + 20.7],
+          3: [424328.211, 4476365.500, 785.870 + 20.7],
+          5: [425538.371, 4474447.171, 854.129 + 20.7],
+        }[cloudIndex] || [426808.02, 4478030.49, 1034.87 + 20.7];
+        walkLookAt(new THREE.Vector3(...walkerCoords));
+      }
+      syncVRToScene();
+    });
   }
 
   // ───────────────────── Ventana de rendimiento (stats-gl), opcional ─────────────────────
-  // Panel FPS + CPU. Se controla desde el MENÚ DE VR (VRControls.js), no desde la barra lateral.
-  // La librería se carga de forma DIFERIDA (import() dentro de try/catch) solo al activarse, así
-  // que por defecto no se carga nada y no puede romper el arranque. El loop() del viewer ya llama
-  // this.stats.begin()/end(), así que basta con asignar/quitar viewer.stats. El menú VR conduce
-  // este módulo a través de la API global window.perfWindow (definida al final).
+  // Panel FPS+CPU controlado desde el menú VR (window.perfWindow). Carga diferida con import().
   let perfStats = null;          // instancia stats-gl (se crea bajo demanda)
   let perfStatsLoading = false;
   let perfScale = 1;             // factor de tamaño (1 = 100%)
@@ -384,9 +398,7 @@
     }
   }
 
-  // El loop() del bundle llama por frame this.stats.begin() … this.stats.end() (Potree original).
-  // begin() marca el inicio de CPU; mapeamos end → update() de stats-gl (cierra la CPU y refresca
-  // FPS+CPU en una sola pasada, sin doble conteo). try/catch como red de seguridad.
+  // El loop() del bundle llama this.stats.begin()/end() por frame; mapeamos end → stats-gl.update().
   function attachPerfStats() {
     viewer.stats = {
       begin: () => { try { perfStats.begin();  } catch (e) {} },
@@ -563,303 +575,79 @@
       });
   }
 
-  // Carga una nube propia del usuario (URL en window.customCloud.url). Espeja los cuerpos
-  // aéreo (case 1) y paseo (case 2) de loadCloudMode, pero usando la URL del usuario y, en
-  // paseo, su punto de inicio window.customCloud.start = [x, y, z] (o el centro del bbox si no
-  // lo indicó). Las coordenadas se interpretan en el sistema propio de la nube.
+  // Carga una nube propia del usuario (URL en window.customCloud.url). En paseo entra en su punto
+  // de inicio window.customCloud.start = [x, y, z] (o el centro del bbox si no lo indicó).
   function loadCustomCloud(viewmode) {
     clearPointClouds();
     const url = window.customCloud && window.customCloud.url;
-    if (!url) { console.warn('[CustomCloud] no hay URL que cargar'); return; }
-
-    if (viewmode === 2) viewer.setControls(new Potree.FirstPersonControls(viewer));
-
-    Potree.loadPointCloud(url).then(e => {
-      let pointcloud = e.pointcloud;
-      let material = pointcloud.material;
-      material.pointSizeType = Potree.PointSizeType.ADAPTIVE;
-      viewer.scene.addPointCloud(pointcloud);
-
-      if (viewmode === 2) { // Modo paseo
-        material.size = 0.5;
-        pointcloud.scale.set(10, 10, 10);
-        pointcloud.updateMatrix();
-
-        let size = pointcloud.boundingBox.getSize(new THREE.Vector3());
-        viewer.scene.getActiveCamera().near = 0.1;
-        viewer.scene.getActiveCamera().far = Math.max(size.x, size.y, size.z) * 10;
-        viewer.scene.getActiveCamera().updateProjectionMatrix();
-
-        let start = window.customCloud.start;
-        let camPos;
-        if (start && start.length === 3 && start.every(Number.isFinite)) {
-          camPos = new THREE.Vector3(start[0], start[1], start[2]);
-        } else {
-          pointcloud.updateMatrixWorld(true);
-          let wb = pointcloud.boundingBox.clone().applyMatrix4(pointcloud.matrixWorld);
-          camPos = wb.getCenter(new THREE.Vector3());
-        }
-        viewer.scene.view.position.copy(camPos);
-        let lookAtPos = camPos.clone();
-        lookAtPos.y += 1;
-        viewer.scene.view.lookAt(lookAtPos);
-        viewer.setMoveSpeed(10);
-      } else { // Modo aéreo
-        material.size = 1;
-        pointcloud.updateMatrixWorld(true);
-        let bbox = pointcloud.boundingBox.clone();
-        bbox.applyMatrix4(pointcloud.matrixWorld);
-        let center = bbox.getCenter(new THREE.Vector3());
-        let bsize = bbox.getSize(new THREE.Vector3());
-        let distance = Math.max(bsize.x, bsize.y, bsize.z) * 1.2;
-
-        let camPos = new THREE.Vector3(center.x + distance, center.y - distance, center.z + distance);
-        viewer.scene.view.position.copy(camPos);
-        viewer.scene.view.lookAt(center);
-
-        viewer.scene.getActiveCamera().near = Math.max(0.1, distance / 1000);
-        viewer.scene.getActiveCamera().far = distance * 20;
-        viewer.scene.getActiveCamera().updateProjectionMatrix();
-        viewer.setMoveSpeed(distance / 5);
-      }
-      syncVRToScene();
-    });
-  }
-
-  // Carga combinada del corredor: nubes 1, 2 y 3 a la vez.
-  // Comparten sistema de coordenadas UTM, así que en modo Dios encajan solas.
-  // En modo Paseo se escalan x10 respecto a un pivote común (la nube 1) para
-  // conservar el teselado del corredor (ver PointCloudOctree.js:115).
-  function loadCorridorCloud(viewmode) {
-    clearPointClouds();
-    const base = 'https://pub-e5dc5ebf430a493e98528ece772092b4.r2.dev/';
-    const urls = [
-      base + 'ejemplo1/metadata.json',
-      base + 'ejemplo2/metadata.json',
-      base + 'ejemplo3/metadata.json',
-    ];
-
-    if (viewmode === 2) viewer.setControls(new Potree.FirstPersonControls(viewer));
-
-    Promise.all(urls.map(u => Potree.loadPointCloud(u))).then(results => {
-      const pcs = results.map(r => r.pointcloud);
-      for (const pc of pcs) {
-        pc.material.pointSizeType = Potree.PointSizeType.ADAPTIVE;
-        pc.material.size = (viewmode === 1) ? 1 : 0.5;
-        viewer.scene.addPointCloud(pc);
-      }
-
-      if (viewmode === 1) { // ---- Modo Dios (aéreo): posiciones naturales + encuadre del bbox unión
-        let union = null;
-        for (const pc of pcs) {
-          pc.updateMatrixWorld(true);
-          const b = pc.boundingBox.clone().applyMatrix4(pc.matrixWorld);
-          union = union ? union.union(b) : b;
-        }
-        const center = union.getCenter(new THREE.Vector3());
-        const size = union.getSize(new THREE.Vector3());
-        const distance = Math.max(size.x, size.y, size.z) * 1.2;
-
-        console.log(`[Corredor/God] center=(${center.x.toFixed(0)},${center.y.toFixed(0)},${center.z.toFixed(0)}) size=(${size.x.toFixed(0)},${size.y.toFixed(0)},${size.z.toFixed(0)}) dist=${distance.toFixed(0)}`);
-
-        const camPos = new THREE.Vector3(
-          center.x + distance,
-          center.y - distance,
-          center.z + distance
-        );
-        viewer.scene.view.position.copy(camPos);
-        viewer.scene.view.lookAt(center);
-
-        viewer.scene.getActiveCamera().near = Math.max(0.1, distance / 1000);
-        viewer.scene.getActiveCamera().far = distance * 20;
-        viewer.scene.getActiveCamera().updateProjectionMatrix();
-
-        viewer.setMoveSpeed(distance / 5);
-      } else { // ---- Modo Paseo (walker): escala x10 respecto a pivote común (nube 1)
-        const pivot = pcs[0].position.clone(); // esquina UTM de la nube 1
-        for (const pc of pcs) {
-          const off = pc.position.clone();
-          pc.scale.set(10, 10, 10);
-          pc.position.set(
-            10 * off.x - 9 * pivot.x,
-            10 * off.y - 9 * pivot.y,
-            10 * off.z - 9 * pivot.z
-          );
-          pc.updateMatrix();
-        }
-
-        let union = null;
-        for (const pc of pcs) {
-          pc.updateMatrixWorld(true);
-          const b = pc.boundingBox.clone().applyMatrix4(pc.matrixWorld);
-          union = union ? union.union(b) : b;
-        }
-        const size = union.getSize(new THREE.Vector3());
-
-        viewer.scene.getActiveCamera().near = 0.1;
-        viewer.scene.getActiveCamera().far = Math.max(size.x, size.y, size.z) * 10;
-        viewer.scene.getActiveCamera().updateProjectionMatrix();
-
-        // Entrada = misma posición que la nube 1 en solitario (es el pivote)
-        const camPos = new THREE.Vector3(426808.02, 4478030.49, 1034.87 + 20.7);
-        viewer.scene.view.position.copy(camPos);
-
-        const lookAtPos = camPos.clone();
-        lookAtPos.y += 1;
-        viewer.scene.view.lookAt(lookAtPos);
-        viewer.setMoveSpeed(10);
-      }
-      syncVRToScene();
-    });
-  }
-
-  // Carga combinada del "Gran Corredor": 10 partes (parte1..parte10) desde R2.
-  // Misma estrategia que loadCorridorCloud (3 partes): en Dios encuadre del bbox unión;
-  // en Paseo escala x10 con pivote en la parte 1 y entrada calculada dinámicamente
-  // desde el bbox de la parte 1 (no hay coordenadas UTM hardcodeadas).
-  function loadGranCorridorCloud(viewmode) {
-    clearPointClouds();
-    const base = 'https://pub-e5dc5ebf430a493e98528ece772092b4.r2.dev/gran_corredor/';
-    const urls = [];
-    for (let i = 1; i <= 10; i++) urls.push(`${base}parte${i}/metadata.json`);
-
-    if (viewmode === 2) viewer.setControls(new Potree.FirstPersonControls(viewer));
-
-    Promise.all(urls.map(u => Potree.loadPointCloud(u))).then(results => {
-      const pcs = results.map(r => r.pointcloud);
-      for (const pc of pcs) {
-        pc.material.pointSizeType = Potree.PointSizeType.ADAPTIVE;
-        pc.material.size = (viewmode === 1) ? 1 : 0.5;
-        viewer.scene.addPointCloud(pc);
-      }
-
-      if (viewmode === 1) { // ---- Modo Dios (aéreo): posiciones naturales + encuadre del bbox unión
-        let union = null;
-        for (const pc of pcs) {
-          pc.updateMatrixWorld(true);
-          const b = pc.boundingBox.clone().applyMatrix4(pc.matrixWorld);
-          union = union ? union.union(b) : b;
-        }
-        const center = union.getCenter(new THREE.Vector3());
-        const size = union.getSize(new THREE.Vector3());
-        const distance = Math.max(size.x, size.y, size.z) * 1.2;
-
-        console.log(`[GranCorredor/God] center=(${center.x.toFixed(0)},${center.y.toFixed(0)},${center.z.toFixed(0)}) size=(${size.x.toFixed(0)},${size.y.toFixed(0)},${size.z.toFixed(0)}) dist=${distance.toFixed(0)}`);
-
-        const camPos = new THREE.Vector3(
-          center.x + distance,
-          center.y - distance,
-          center.z + distance
-        );
-        viewer.scene.view.position.copy(camPos);
-        viewer.scene.view.lookAt(center);
-
-        viewer.scene.getActiveCamera().near = Math.max(0.1, distance / 1000);
-        viewer.scene.getActiveCamera().far = distance * 20;
-        viewer.scene.getActiveCamera().updateProjectionMatrix();
-
-        viewer.setMoveSpeed(distance / 5);
-      } else { // ---- Modo Paseo (walker): escala x10 respecto a pivote común (parte 1)
-        const pivot = pcs[0].position.clone();
-        for (const pc of pcs) {
-          const off = pc.position.clone();
-          pc.scale.set(10, 10, 10);
-          pc.position.set(
-            10 * off.x - 9 * pivot.x,
-            10 * off.y - 9 * pivot.y,
-            10 * off.z - 9 * pivot.z
-          );
-          pc.updateMatrix();
-        }
-
-        let union = null;
-        for (const pc of pcs) {
-          pc.updateMatrixWorld(true);
-          const b = pc.boundingBox.clone().applyMatrix4(pc.matrixWorld);
-          union = union ? union.union(b) : b;
-        }
-        const size = union.getSize(new THREE.Vector3());
-
-        viewer.scene.getActiveCamera().near = 0.1;
-        viewer.scene.getActiveCamera().far = Math.max(size.x, size.y, size.z) * 10;
-        viewer.scene.getActiveCamera().updateProjectionMatrix();
-
-        // Entrada de Paseo fijada por el usuario (UTM ground + 20.7 de altura de ojos en coords escaladas x10)
-        const camPos = new THREE.Vector3(280617.970, 4413806.330, 447.060 + 20.7);
-        console.log(`[GranCorredor/Walker] camPos=(${camPos.x.toFixed(3)},${camPos.y.toFixed(3)},${camPos.z.toFixed(3)})`);
-        viewer.scene.view.position.copy(camPos);
-
-        const lookAtPos = camPos.clone();
-        lookAtPos.y += 1;
-        viewer.scene.view.lookAt(lookAtPos);
-        viewer.setMoveSpeed(10);
-      }
-      syncVRToScene();
-    });
-  }
-
-  // Carga del "Gran Corredor 2": una sola nube (todo el corredor en un único archivo).
-  // Misma lógica que las nubes individuales pero con entrada de Paseo calculada
-  // dinámicamente desde el bbox (sin coordenadas UTM hardcodeadas).
-  function loadGranCorridor2Cloud(viewmode) {
-    clearPointClouds();
-    const url = 'https://pub-e5dc5ebf430a493e98528ece772092b4.r2.dev/gran_corredor_2/metadata.json';
-
+    if (!url) return;
     if (viewmode === 2) viewer.setControls(new Potree.FirstPersonControls(viewer));
 
     Potree.loadPointCloud(url).then(e => {
       const pointcloud = e.pointcloud;
-      const material = e.pointcloud.material;
-      material.pointSizeType = Potree.PointSizeType.ADAPTIVE;
-      material.size = (viewmode === 1) ? 1 : 0.5;
-      viewer.scene.addPointCloud(pointcloud);
+      addCloud(pointcloud, viewmode);
 
-      if (viewmode === 1) { // ---- Modo Dios (aéreo)
-        pointcloud.updateMatrixWorld(true);
-        const bbox = pointcloud.boundingBox.clone().applyMatrix4(pointcloud.matrixWorld);
-        const center = bbox.getCenter(new THREE.Vector3());
-        const size = bbox.getSize(new THREE.Vector3());
-        const distance = Math.max(size.x, size.y, size.z) * 1.2;
+      if (viewmode === 2) {
+        scaleWalkX10([pointcloud]);
+        // far según la extensión propia de la nube (bbox local, sin escalar).
+        const size = pointcloud.boundingBox.getSize(new THREE.Vector3());
+        const cam = viewer.scene.getActiveCamera();
+        cam.near = 0.1;
+        cam.far = Math.max(size.x, size.y, size.z) * 10;
+        cam.updateProjectionMatrix();
 
-        console.log(`[GranCorredor2/God] center=(${center.x.toFixed(0)},${center.y.toFixed(0)},${center.z.toFixed(0)}) size=(${size.x.toFixed(0)},${size.y.toFixed(0)},${size.z.toFixed(0)}) dist=${distance.toFixed(0)}`);
-
-        const camPos = new THREE.Vector3(
-          center.x + distance,
-          center.y - distance,
-          center.z + distance
-        );
-        viewer.scene.view.position.copy(camPos);
-        viewer.scene.view.lookAt(center);
-
-        viewer.scene.getActiveCamera().near = Math.max(0.1, distance / 1000);
-        viewer.scene.getActiveCamera().far = distance * 20;
-        viewer.scene.getActiveCamera().updateProjectionMatrix();
-
-        viewer.setMoveSpeed(distance / 5);
-      } else { // ---- Modo Paseo (walker): escala x10 como las nubes individuales
-        pointcloud.scale.set(10, 10, 10);
-        pointcloud.updateMatrix();
-        pointcloud.updateMatrixWorld(true);
-
-        const bbox = pointcloud.boundingBox.clone().applyMatrix4(pointcloud.matrixWorld);
-        const size = bbox.getSize(new THREE.Vector3());
-
-        viewer.scene.getActiveCamera().near = 0.1;
-        viewer.scene.getActiveCamera().far = Math.max(size.x, size.y, size.z) * 10;
-        viewer.scene.getActiveCamera().updateProjectionMatrix();
-
-        // Entrada de Paseo fijada por el usuario (UTM ground + 20.7 de altura de ojos en coords escaladas x10)
-        const camPos = new THREE.Vector3(454491.539, 3109992.743, 2556.448 + 20.7);
-        console.log(`[GranCorredor2/Walker] camPos=(${camPos.x.toFixed(3)},${camPos.y.toFixed(3)},${camPos.z.toFixed(3)})`);
-        viewer.scene.view.position.copy(camPos);
-
-        const lookAtPos = camPos.clone();
-        lookAtPos.y += 1;
-        viewer.scene.view.lookAt(lookAtPos);
-        viewer.setMoveSpeed(10);
+        const start = window.customCloud.start;
+        let camPos;
+        if (start && start.length === 3 && start.every(Number.isFinite)) {
+          camPos = new THREE.Vector3(start[0], start[1], start[2]);
+        } else {
+          camPos = worldBBox([pointcloud]).getCenter(new THREE.Vector3());
+        }
+        walkLookAt(camPos);
+      } else {
+        frameGodView([pointcloud]);
       }
-      // Carteles de sendero (exclusivos de Paseo Garañón). El grupo replica pointcloud.scale
-      // (x10 en Paseo, x1 en aéreo). Cartel 1 visible en ambos modos; cartel 2 solo en Paseo.
+      syncVRToScene();
+    });
+  }
+
+  // Corredor: nubes 1, 2 y 3 a la vez (comparten UTM). Entrada de paseo en la esquina de la nube 1.
+  function loadCorridorCloud(viewmode) {
+    const base = 'https://pub-e5dc5ebf430a493e98528ece772092b4.r2.dev/';
+    const urls = [base + 'ejemplo1/metadata.json', base + 'ejemplo2/metadata.json', base + 'ejemplo3/metadata.json'];
+    loadMultiCloud(urls, viewmode, new THREE.Vector3(426808.02, 4478030.49, 1034.87 + 20.7));
+  }
+
+  // Gran Corredor: 10 partes (parte1..parte10) desde R2, misma estrategia que el corredor.
+  function loadGranCorridorCloud(viewmode) {
+    const base = 'https://pub-e5dc5ebf430a493e98528ece772092b4.r2.dev/gran_corredor/';
+    const urls = [];
+    for (let i = 1; i <= 10; i++) urls.push(`${base}parte${i}/metadata.json`);
+    loadMultiCloud(urls, viewmode, new THREE.Vector3(280617.970, 4413806.330, 447.060 + 20.7));
+  }
+
+  // Gran Corredor 2: una sola nube (todo el corredor en un archivo). Lleva carteles de sendero.
+  function loadGranCorridor2Cloud(viewmode) {
+    clearPointClouds();
+    const url = 'https://pub-e5dc5ebf430a493e98528ece772092b4.r2.dev/gran_corredor_2/metadata.json';
+    if (viewmode === 2) viewer.setControls(new Potree.FirstPersonControls(viewer));
+
+    Potree.loadPointCloud(url).then(e => {
+      const pointcloud = e.pointcloud;
+      addCloud(pointcloud, viewmode);
+
+      if (viewmode === 1) {
+        frameGodView([pointcloud]);
+      } else {
+        scaleWalkX10([pointcloud]);
+        const size = worldBBox([pointcloud]).getSize(new THREE.Vector3());
+        const cam = viewer.scene.getActiveCamera();
+        cam.near = 0.1;
+        cam.far = Math.max(size.x, size.y, size.z) * 10;
+        cam.updateProjectionMatrix();
+        walkLookAt(new THREE.Vector3(454491.539, 3109992.743, 2556.448 + 20.7));
+      }
+      // Carteles de sendero: el grupo replica la escala de la nube (x10 en Paseo, x1 en aéreo).
       window.trailSignGroup = buildTrailSign(pointcloud);
       syncVRToScene();
     });
@@ -903,34 +691,18 @@
         anomCenterUTM = new THREE.Vector3(cx / pts.length, cy / pts.length, cz / pts.length);
       }
 
-      if (viewmode === 1) { // ---- Modo Dios (aéreo): encuadre del bbox
-        pointcloud.updateMatrixWorld(true);
-        const bbox = pointcloud.boundingBox.clone().applyMatrix4(pointcloud.matrixWorld);
-        const center = bbox.getCenter(new THREE.Vector3());
+      if (viewmode === 1) {
+        frameGodView([pointcloud]);
+      } else { // Paseo: escala x10 y spawn cerca de la anomalía
+        scaleWalkX10([pointcloud]);
+        const bbox = worldBBox([pointcloud]);
         const size = bbox.getSize(new THREE.Vector3());
-        const distance = Math.max(size.x, size.y, size.z) * 1.2;
+        const cam = viewer.scene.getActiveCamera();
+        cam.near = 0.1;
+        cam.far = Math.max(size.x, size.y, size.z) * 10;
+        cam.updateProjectionMatrix();
 
-        const camPos = new THREE.Vector3(center.x + distance, center.y - distance, center.z + distance);
-        viewer.scene.view.position.copy(camPos);
-        viewer.scene.view.lookAt(center);
-
-        viewer.scene.getActiveCamera().near = Math.max(0.1, distance / 1000);
-        viewer.scene.getActiveCamera().far = distance * 20;
-        viewer.scene.getActiveCamera().updateProjectionMatrix();
-        viewer.setMoveSpeed(distance / 5);
-      } else { // ---- Modo Paseo (walker): escala x10 y spawn cerca de la anomalía
-        pointcloud.scale.set(10, 10, 10);
-        pointcloud.updateMatrix();
-        pointcloud.updateMatrixWorld(true);
-
-        const bbox = pointcloud.boundingBox.clone().applyMatrix4(pointcloud.matrixWorld);
-        const size = bbox.getSize(new THREE.Vector3());
-        viewer.scene.getActiveCamera().near = 0.1;
-        viewer.scene.getActiveCamera().far = Math.max(size.x, size.y, size.z) * 10;
-        viewer.scene.getActiveCamera().updateProjectionMatrix();
-
-        // Punto de la anomalía en coords de mundo: world = offset + 10*(UTM - offset)
-        // (offset = pointcloud.position; la nube está escalada x10 en Paseo)
+        // Punto de la anomalía en coords de mundo: world = offset + 10*(UTM - offset).
         let target;
         if (anomCenterUTM) {
           target = anomCenterUTM.clone().sub(pointcloud.position).multiplyScalar(10).add(pointcloud.position);
@@ -944,13 +716,8 @@
       }
 
       // Volúmenes de anomalía (ocultos/sin clip por defecto; se activan con el menú VR / tecla 3)
-      const nPts = (anomData && anomData.building && anomData.building.points)
-        ? anomData.building.points.length : 0;
-      console.log('[Anomalías] json=' + (anomData ? 'OK' : 'NULL') + ' puntos=' + nPts);
       if (anomData) {
-        const vols = buildAnomalyCylinders(pointcloud, anomData);
-        console.log('[Anomalías] volúmenes=' + vols.length +
-          ' escala=' + pointcloud.scale.x + ' activo=' + !!window.anomaliesWanted);
+        buildAnomalyCylinders(pointcloud, anomData);
       } else {
         removeAnomalyVolumes();
         console.warn('[Anomalías] no se pudo cargar anomalías.json (revisa la URL del bucket)');
@@ -960,20 +727,11 @@
     });
   }
 
-  // Construye un VOLUMEN DE RECORTE (Potree.BoxVolume con forma 'cylinder') por cada grupo de
-  // anomalía, con un cilindro rojo translúcido como hijo visual. Reutiliza la infraestructura
-  // de "delimitar zonas":
-  //   1) PROFUNDIDAD CORRECTA: los volúmenes se dibujan en viewer.volumeTool.scene, que en VR
-  //      se renderiza DESPUÉS de los puntos (viewer.renderVR) y en escritorio en el pase
-  //      'render.pass.scene'. Antes el cilindro colgaba de viewer.scene.scene, que en VR se
-  //      dibuja ANTES de los puntos -> quedaba detrás. Como volumen ya no.
-  //   2) RESALTAR EL INTERIOR: clip=true + clipTask=HIGHLIGHT (por defecto en el viewer) hace
-  //      que el shader sume rojo a los puntos dentro del cilindro (igual que las zonas).
-  //
-  // El volumen vive en COORDENADAS DE MUNDO (igual que las zonas que coloca el usuario):
-  //   centroMundo = offset + escala*(UTM_anomalía - offset)
-  //   escala del volumen = (2*radio*S, 2*radio*S, altura*S)   [cilindro unidad: radio 0.5, alto 1, eje Z]
-  // Así coincide con los puntos renderizados tanto en Aéreo (S=1) como en Paseo (S=10).
+  // Construye un volumen de recorte (Potree.BoxVolume forma 'cylinder') por grupo de anomalía, con
+  // un cilindro rojo translúcido como hijo. Va en viewer.volumeTool.scene (se dibuja tras los puntos,
+  // así no queda detrás) y usa clip=true + clipTask=HIGHLIGHT para teñir de rojo el interior. En
+  // coords de mundo: centro = offset + S*(UTM - offset); escala = (2r·S, 2r·S, alto·S), con S = escala
+  // de la nube (1 aéreo, 10 paseo).
   function buildAnomalyCylinders(pointcloud, data) {
     // Quitar volúmenes de una carga anterior
     removeAnomalyVolumes();
@@ -1117,8 +875,6 @@
     group.visible = true; // el contenedor siempre se muestra; cada cartel decide su visibilidad
     viewer.scene.scene.add(group); // world scene -> escritorio y VR
 
-    console.log('[Cartel] offset(pc.pos)=(' + pointcloud.position.x.toFixed(1) + ',' + pointcloud.position.y.toFixed(1) + ',' + pointcloud.position.z.toFixed(1) + ')' +
-      ' escala=' + pointcloud.scale.x + ' carteles=' + group.children.length);
     return group;
   }
 

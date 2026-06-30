@@ -505,7 +505,7 @@ export class VRControls extends EventDispatcher{
 		this.polygonMode = false;
 		this._polygonPoints = [];     // puntos 3D (mundo) pintados sobre la nube, máx 8
 		this._polygonPreview = null;  // Potree.Measure (contorno cerrado) de previsualización
-		this._polygonCamera = null;   // cámara ortográfica capturada al empezar (define la extrusión)
+		this._polygonCamera = null;   // (sin uso) la cámara de extrusión se construye en _finishPolygon
 		this._polygonClips = [];      // PolygonClipVolume creados, para poder borrarlos
 
 		// Edición de classification por punto
@@ -616,29 +616,38 @@ export class VRControls extends EventDispatcher{
 		this._createPerfMenu();
 	}
 
-	_createVRMenu(){
+	// Material del fondo de panel (instancia nueva por menú para poder liberarla por separado).
+	_menuBgMaterial(){
+		return new THREE.MeshBasicMaterial({
+			color: 0x0d1b2e, transparent: true, opacity: 0.88, side: THREE.DoubleSide,
+		});
+	}
+
+	// Andamiaje común de un menú: grupo oculto + fondo + título. Devuelve {group, title}.
+	_createMenuPanel({name, width, height, bgY = 0, title, titleScale, titleY}){
 		const group = new THREE.Group();
-		group.name = 'vr-mode-menu';
+		group.name = name;
 		group.visible = false;
 
-		// Fondo del panel (ampliado para una fila más: botón "Rendimiento")
-		const bgMat = new THREE.MeshBasicMaterial({
-			color: 0x0d1b2e,
-			transparent: true,
-			opacity: 0.88,
-			side: THREE.DoubleSide,
-		});
-		const bg = new THREE.Mesh(new THREE.PlaneGeometry(0.64, 1.24), bgMat);
-		bg.position.set(0, -0.07, 0);
+		const bg = new THREE.Mesh(new THREE.PlaneGeometry(width, height), this._menuBgMaterial());
+		bg.position.set(0, bgY, 0);
 		group.add(bg);
 
-		// Título
-		const title = this._createMenuTitle('MODO DE VISIÓN');
-		title.scale.set(0.093, 0.093, 0.093);
-		title.position.set(0, 0.34, 0.002);
-		group.add(title);
+		const titleNode = this._createMenuTitle(title);
+		titleNode.scale.set(titleScale, titleScale, titleScale);
+		titleNode.position.set(0, titleY, 0.002);
+		group.add(titleNode);
 
-		// Grid 4x2: Paseo | Aéreo / Medidas | Apariencia / Atributo | Recortado / Cambiar nube | Editar Clasif.
+		return {group, title: titleNode};
+	}
+
+	_createVRMenu(){
+		const {group} = this._createMenuPanel({
+			name: 'vr-mode-menu', width: 0.64, height: 1.24, bgY: -0.07,
+			title: 'MODO DE VISIÓN', titleScale: 0.093, titleY: 0.34,
+		});
+
+		// Rejilla de botones (modos de visión y accesos a submenús)
 		const btnWalk = this._createMenuButton('Modo Paseo', 2);
 		btnWalk.position.set(-0.17, 0.16, 0.002);
 		group.add(btnWalk);
@@ -647,7 +656,7 @@ export class VRControls extends EventDispatcher{
 		btnGod.position.set(0.17, 0.16, 0.002);
 		group.add(btnGod);
 
-		const btnPoints = this._createMenuButton('Activar Colocar\nMedidas', 'OPEN_MEASURE');
+		const btnPoints = this._createMenuButton('Colocar\nMedidas', 'OPEN_MEASURE');
 		btnPoints.position.set(-0.17, 0.0, 0.002);
 		group.add(btnPoints);
 
@@ -659,7 +668,7 @@ export class VRControls extends EventDispatcher{
 		btnAttribute.position.set(-0.17, -0.16, 0.002);
 		group.add(btnAttribute);
 
-		const btnClip = this._createMenuButton('Recortado de\nZonas', 'OPEN_CLIP');
+		const btnClip = this._createMenuButton('Colocar\ndelimitadores\nde zona', 'OPEN_CLIP');
 		btnClip.position.set(0.17, -0.16, 0.002);
 		group.add(btnClip);
 
@@ -691,30 +700,61 @@ export class VRControls extends EventDispatcher{
 
 	_createMenuButton(label, modeId, opts){
 		opts = opts || {};
+		const swatch = opts.swatch || null;
 		const canvas = document.createElement('canvas');
 		canvas.width = opts.canvasW || 256;
 		canvas.height = opts.canvasH || 128;
-		this._drawButtonCanvas(canvas, label, false);
+		this._drawButtonCanvas(canvas, label, false, swatch);
 
 		const tex = new THREE.CanvasTexture(canvas);
 		const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true });
 		const mesh = new THREE.Mesh(new THREE.PlaneGeometry(opts.width || 0.28, opts.height || 0.14), mat);
 		mesh.userData = {
 			modeId, label, canvas, tex, hovered: false,
-			redraw: (h) => { this._drawButtonCanvas(canvas, label, h); tex.needsUpdate = true; },
+			redraw: (h) => { this._drawButtonCanvas(canvas, label, h, swatch); tex.needsUpdate = true; },
 		};
 		return mesh;
 	}
 
-	_drawButtonCanvas(canvas, label, highlighted){
+	// Fondo + borde estándar de un botón/casilla en canvas (variante seleccionada en verde).
+	_drawPanelBackground(ctx, w, h, opts = {}){
+		const {hovered = false, selected = false, lineWidth = 5, inset = 3} = opts;
+		ctx.clearRect(0, 0, w, h);
+		if(selected){
+			ctx.fillStyle = hovered ? '#2a6a2a' : '#1a4a1a';
+			ctx.strokeStyle = hovered ? '#66dd66' : '#44aa44';
+		}else{
+			ctx.fillStyle = hovered ? '#2255bb' : '#162538';
+			ctx.strokeStyle = hovered ? '#88ccff' : '#3a6090';
+		}
+		ctx.fillRect(0, 0, w, h);
+		ctx.lineWidth = lineWidth;
+		ctx.strokeRect(inset, inset, w - 2 * inset, h - 2 * inset);
+	}
+
+	_drawButtonCanvas(canvas, label, highlighted, swatchColor){
 		const ctx = canvas.getContext('2d');
 		const W = canvas.width, H = canvas.height;
-		ctx.clearRect(0, 0, W, H);
-		ctx.fillStyle = highlighted ? '#2255bb' : '#162538';
-		ctx.fillRect(0, 0, W, H);
-		ctx.strokeStyle = highlighted ? '#88ccff' : '#3a6090';
-		ctx.lineWidth = 5;
-		ctx.strokeRect(3, 3, W - 6, H - 6);
+		this._drawPanelBackground(ctx, W, H, {hovered: highlighted});
+
+		// Cuadrado de color a la derecha (p.ej. el color real de una clase) para
+		// identificarla de un vistazo. Si hay swatch, el texto se centra en el
+		// espacio restante a la izquierda para que no se solape.
+		let textCenterX = W / 2;
+		if(swatchColor){
+			const side = Math.round(H * 0.40);
+			const margin = Math.round(H * 0.12);
+			const sx = W - side - margin;
+			const sy = (H - side) / 2;
+			ctx.fillStyle = swatchColor;
+			ctx.fillRect(sx, sy, side, side);
+			ctx.strokeStyle = highlighted ? '#ffffff' : '#cdd7e3';
+			ctx.lineWidth = 2;
+			ctx.strokeRect(sx, sy, side, side);
+			// Zona reservada a la derecha → centrar el texto en el resto.
+			textCenterX = (W - (side + 2 * margin)) / 2;
+		}
+
 		ctx.fillStyle = '#ffffff';
 		ctx.textAlign = 'center';
 		ctx.textBaseline = 'middle';
@@ -722,22 +762,16 @@ export class VRControls extends EventDispatcher{
 		const lines = label.split('\n');
 		if(lines.length === 1){
 			ctx.font = 'bold 34px Arial, sans-serif';
-			ctx.fillText(label, W / 2, H / 2);
+			ctx.fillText(label, textCenterX, H / 2);
 		} else {
 			ctx.font = 'bold 26px Arial, sans-serif';
 			const lineH = 34;
 			const startY = H / 2 - ((lines.length - 1) * lineH) / 2;
-			lines.forEach((line, i) => ctx.fillText(line, W / 2, startY + i * lineH));
+			lines.forEach((line, i) => ctx.fillText(line, textCenterX, startY + i * lineH));
 		}
 	}
 
-	// Cartel de título de un menú: texto blanco liso en Arial negrita (sin caja
-	// ni contorno), igual al estilo del texto de los botones. Es un plane mesh
-	// ESTÁTICO (no billboard: no gira hacia la cámara, queda fijo en el panel).
-	// Mantiene la convención de escala anterior (geometría a canvasW*0.01) para
-	// que los title.scale.set(...) ya afinados en cada menú sigan siendo válidos.
-	// El objeto devuelto expone setText(nuevoTexto) para títulos dinámicos.
-	// opts.fontSize permite agrandar el texto (por defecto 40, > 34 del botón).
+	// Título de un menú: texto blanco fijo (no billboard). Devuelve un objeto con setText().
 	_createMenuTitle(text, opts){
 		opts = opts || {};
 		const fontSize = opts.fontSize || 40;
@@ -812,12 +846,7 @@ export class VRControls extends EventDispatcher{
 
 	_drawSmallButtonCanvas(canvas, symbol, highlighted){
 		const ctx = canvas.getContext('2d');
-		ctx.clearRect(0, 0, 64, 64);
-		ctx.fillStyle = highlighted ? '#2255bb' : '#162538';
-		ctx.fillRect(0, 0, 64, 64);
-		ctx.strokeStyle = highlighted ? '#88ccff' : '#3a6090';
-		ctx.lineWidth = 4;
-		ctx.strokeRect(2, 2, 60, 60);
+		this._drawPanelBackground(ctx, 64, 64, {hovered: highlighted, lineWidth: 4, inset: 2});
 		ctx.fillStyle = '#ffffff';
 		ctx.textAlign = 'center';
 		ctx.textBaseline = 'middle';
@@ -828,17 +857,7 @@ export class VRControls extends EventDispatcher{
 	_drawRadioButtonCanvas(canvas, label, hovered, selected){
 		const ctx = canvas.getContext('2d');
 		const w = canvas.width, h = canvas.height;
-		ctx.clearRect(0, 0, w, h);
-		if(selected){
-			ctx.fillStyle = hovered ? '#2a6a2a' : '#1a4a1a';
-			ctx.strokeStyle = hovered ? '#66dd66' : '#44aa44';
-		} else {
-			ctx.fillStyle = hovered ? '#2255bb' : '#162538';
-			ctx.strokeStyle = hovered ? '#88ccff' : '#3a6090';
-		}
-		ctx.fillRect(0, 0, w, h);
-		ctx.lineWidth = 5;
-		ctx.strokeRect(3, 3, w - 6, h - 6);
+		this._drawPanelBackground(ctx, w, h, {hovered, selected});
 		ctx.fillStyle = '#ffffff';
 		ctx.textAlign = 'center';
 		ctx.textBaseline = 'middle';
@@ -1134,7 +1153,6 @@ export class VRControls extends EventDispatcher{
 		menuPos.y -= 0.05;
 		this.activeMenu.position.copy(menuPos);
 		this.activeMenu.lookAt(pos);
-		console.log(`[VRMenu] cam=(${pos.x.toFixed(2)},${pos.y.toFixed(2)},${pos.z.toFixed(2)}) menu=(${menuPos.x.toFixed(2)},${menuPos.y.toFixed(2)},${menuPos.z.toFixed(2)})`);
 	}
 
 	_createSliderWidget({label, min, max, step, getValue, setValue, valueFormat, labelScale}){
@@ -1216,12 +1234,7 @@ export class VRControls extends EventDispatcher{
 
 		const drawBox = (checked, hovered) => {
 			const ctx = canvas.getContext('2d');
-			ctx.clearRect(0, 0, 64, 64);
-			ctx.fillStyle = hovered ? '#2255bb' : '#162538';
-			ctx.fillRect(0, 0, 64, 64);
-			ctx.strokeStyle = hovered ? '#88ccff' : '#3a6090';
-			ctx.lineWidth = 4;
-			ctx.strokeRect(2, 2, 60, 60);
+			this._drawPanelBackground(ctx, 64, 64, {hovered, lineWidth: 4, inset: 2});
 			if(checked){
 				ctx.strokeStyle = '#88ff88';
 				ctx.lineWidth = 6;
@@ -1250,21 +1263,10 @@ export class VRControls extends EventDispatcher{
 	}
 
 	_createAppearanceMenu(){
-		const group = new THREE.Group();
-		group.name = 'vr-appearance-menu';
-		group.visible = false;
-
-		const bgMat = new THREE.MeshBasicMaterial({
-			color: 0x0d1b2e, transparent: true, opacity: 0.88, side: THREE.DoubleSide,
+		const {group} = this._createMenuPanel({
+			name: 'vr-appearance-menu', width: 0.80, height: 1.22, bgY: 0.13,
+			title: 'APARIENCIA', titleScale: 0.11, titleY: 0.62,
 		});
-		const bg = new THREE.Mesh(new THREE.PlaneGeometry(0.80, 1.22), bgMat);
-		bg.position.set(0, 0.13, 0);
-		group.add(bg);
-
-		const title = this._createMenuTitle('APARIENCIA');
-		title.scale.set(0.11, 0.11, 0.11);
-		title.position.set(0, 0.62, 0.002);
-		group.add(title);
 
 		const interactives = [];
 
@@ -1349,25 +1351,12 @@ export class VRControls extends EventDispatcher{
 		this.appearanceMenu = group;
 	}
 
-	// Submenú "RENDIMIENTO": muestra/oculta la ventana de stats (FPS+CPU) y ajusta su tamaño.
-	// El panel en sí es un DOM gestionado por la página (window.perfWindow, en 1_ejemplo_profe.html);
-	// aquí solo está el control. El panel se ve en la pantalla espejo 2D, no dentro del casco.
+	// Submenú "RENDIMIENTO": muestra/oculta la ventana de stats y ajusta su tamaño (window.perfWindow).
 	_createPerfMenu(){
-		const group = new THREE.Group();
-		group.name = 'vr-perf-menu';
-		group.visible = false;
-
-		const bgMat = new THREE.MeshBasicMaterial({
-			color: 0x0d1b2e, transparent: true, opacity: 0.88, side: THREE.DoubleSide,
+		const {group} = this._createMenuPanel({
+			name: 'vr-perf-menu', width: 0.80, height: 0.66, bgY: 0.04,
+			title: 'RENDIMIENTO', titleScale: 0.11, titleY: 0.30,
 		});
-		const bg = new THREE.Mesh(new THREE.PlaneGeometry(0.80, 0.66), bgMat);
-		bg.position.set(0, 0.04, 0);
-		group.add(bg);
-
-		const title = this._createMenuTitle('RENDIMIENTO');
-		title.scale.set(0.11, 0.11, 0.11);
-		title.position.set(0, 0.30, 0.002);
-		group.add(title);
 
 		const interactives = [];
 
@@ -1411,23 +1400,10 @@ export class VRControls extends EventDispatcher{
 	}
 
 	_createMeasureMenu(){
-		const group = new THREE.Group();
-		group.name = 'vr-measure-menu';
-		group.visible = false;
-
-		const bgMat = new THREE.MeshBasicMaterial({
-			color: 0x0d1b2e,
-			transparent: true,
-			opacity: 0.88,
-			side: THREE.DoubleSide,
+		const {group} = this._createMenuPanel({
+			name: 'vr-measure-menu', width: 0.64, height: 0.90,
+			title: 'MEDIDAS', titleScale: 0.093, titleY: 0.35,
 		});
-		const bg = new THREE.Mesh(new THREE.PlaneGeometry(0.64, 0.90), bgMat);
-		group.add(bg);
-
-		const title = this._createMenuTitle('MEDIDAS');
-		title.scale.set(0.093, 0.093, 0.093);
-		title.position.set(0, 0.35, 0.002);
-		group.add(title);
 
 		const btnDistance = this._createMenuButton('Medir Distancias', 'MEASURE_DISTANCE');
 		btnDistance.position.set(0, 0.20, 0.002);
@@ -1437,11 +1413,11 @@ export class VRControls extends EventDispatcher{
 		btnHeight.position.set(0, 0.05, 0.002);
 		group.add(btnHeight);
 
-		const btnInfo = this._createMenuButton('Punto de Info', 'MEASURE_INFO_POINT');
+		const btnInfo = this._createMenuButton('Punto de Inf.', 'MEASURE_INFO_POINT');
 		btnInfo.position.set(0, -0.10, 0.002);
 		group.add(btnInfo);
 
-		const btnDelete = this._createMenuButton('Eliminar Puntos', 'MEASURE_DELETE_ALL');
+		const btnDelete = this._createMenuButton('Eliminar Puntos\nColocados', 'MEASURE_DELETE_ALL');
 		btnDelete.position.set(0, -0.25, 0.002);
 		group.add(btnDelete);
 
@@ -1455,30 +1431,20 @@ export class VRControls extends EventDispatcher{
 	}
 
 	_createClipMenu(){
-		const group = new THREE.Group();
-		group.name = 'vr-clip-menu';
-		group.visible = false;
-
-		const bgMat = new THREE.MeshBasicMaterial({
-			color: 0x0d1b2e, transparent: true, opacity: 0.88, side: THREE.DoubleSide,
+		const {group} = this._createMenuPanel({
+			name: 'vr-clip-menu', width: 0.70, height: 1.04,
+			title: 'RECORTADO DE ZONAS', titleScale: 0.093, titleY: 0.42,
 		});
-		const bg = new THREE.Mesh(new THREE.PlaneGeometry(0.70, 1.04), bgMat);
-		group.add(bg);
 
-		const title = this._createMenuTitle('RECORTADO DE ZONAS');
-		title.scale.set(0.093, 0.093, 0.093);
-		title.position.set(0, 0.42, 0.002);
-		group.add(title);
-
-		const btnDelimit = this._createMenuButton('Delimitar Zonas', 'CLIP_DELIMIT');
+		const btnDelimit = this._createMenuButton('Colocar Limite\nVolumétrico', 'CLIP_DELIMIT');
 		btnDelimit.position.set(0, 0.28, 0.002);
 		group.add(btnDelimit);
 
-		const btnPolygon = this._createMenuButton('Dibujar Polígono', 'CLIP_POLYGON');
+		const btnPolygon = this._createMenuButton('Dibujar\nPolígono 2D', 'CLIP_POLYGON');
 		btnPolygon.position.set(0, 0.14, 0.002);
 		group.add(btnPolygon);
 
-		const btnModify = this._createMenuButton('Modificar Zonas', 'OPEN_CLIP_TASK');
+		const btnModify = this._createMenuButton('Editar efecto\nde Volúmenes', 'OPEN_CLIP_TASK');
 		btnModify.position.set(0, 0.00, 0.002);
 		group.add(btnModify);
 
@@ -1500,20 +1466,10 @@ export class VRControls extends EventDispatcher{
 	}
 
 	_createClipTaskMenu(){
-		const group = new THREE.Group();
-		group.name = 'vr-cliptask-menu';
-		group.visible = false;
-
-		const bgMat = new THREE.MeshBasicMaterial({
-			color: 0x0d1b2e, transparent: true, opacity: 0.88, side: THREE.DoubleSide,
+		const {group} = this._createMenuPanel({
+			name: 'vr-cliptask-menu', width: 0.64, height: 0.62,
+			title: 'CLIP TASK', titleScale: 0.11, titleY: 0.24,
 		});
-		const bg = new THREE.Mesh(new THREE.PlaneGeometry(0.64, 0.62), bgMat);
-		group.add(bg);
-
-		const title = this._createMenuTitle('CLIP TASK');
-		title.scale.set(0.11, 0.11, 0.11);
-		title.position.set(0, 0.24, 0.002);
-		group.add(title);
 
 		const radio = this._createRadioGroupWidget({
 			options: [
@@ -1539,20 +1495,10 @@ export class VRControls extends EventDispatcher{
 	}
 
 	_createClipShapeMenu(){
-		const group = new THREE.Group();
-		group.name = 'vr-clip-shape-menu';
-		group.visible = false;
-
-		const bgMat = new THREE.MeshBasicMaterial({
-			color: 0x0d1b2e, transparent: true, opacity: 0.88, side: THREE.DoubleSide,
+		const {group} = this._createMenuPanel({
+			name: 'vr-clip-shape-menu', width: 0.70, height: 0.66,
+			title: 'FORMA DE ZONA', titleScale: 0.093, titleY: 0.24,
 		});
-		const bg = new THREE.Mesh(new THREE.PlaneGeometry(0.70, 0.66), bgMat);
-		group.add(bg);
-
-		const title = this._createMenuTitle('FORMA DE ZONA');
-		title.scale.set(0.093, 0.093, 0.093);
-		title.position.set(0, 0.24, 0.002);
-		group.add(title);
 
 		const btnBox = this._createMenuButton('Cubo', 'CLIP_SHAPE_BOX');
 		btnBox.position.set(0, 0.10, 0.002);
@@ -1575,23 +1521,12 @@ export class VRControls extends EventDispatcher{
 		this.clipShapeMenu = group;
 	}
 
-	// Submenú para elegir el modo de reclasificación por apuntado (punto a punto / spray)
-	// y ajustar el radio del pincel de spray. Se abre desde "Editar Clasificación".
+	// Submenú "RECLASIFICAR": elige modo de apuntado (punto a punto / spray) y radio del pincel.
 	_createReclassModeMenu(){
-		const group = new THREE.Group();
-		group.name = 'vr-reclass-mode-menu';
-		group.visible = false;
-
-		const bgMat = new THREE.MeshBasicMaterial({
-			color: 0x0d1b2e, transparent: true, opacity: 0.88, side: THREE.DoubleSide,
+		const {group} = this._createMenuPanel({
+			name: 'vr-reclass-mode-menu', width: 0.80, height: 0.84,
+			title: 'RECLASIFICAR', titleScale: 0.11, titleY: 0.32,
 		});
-		const bg = new THREE.Mesh(new THREE.PlaneGeometry(0.80, 0.84), bgMat);
-		group.add(bg);
-
-		const title = this._createMenuTitle('RECLASIFICAR');
-		title.scale.set(0.11, 0.11, 0.11);
-		title.position.set(0, 0.32, 0.002);
-		group.add(title);
 
 		const modeBtnOpts = { width: 0.60, height: 0.15, canvasW: 520 };
 		const btnPoint = this._createMenuButton('Reclasificar\npunto por punto', 'RECLASSIFY_MODE_POINT', modeBtnOpts);
@@ -1625,20 +1560,10 @@ export class VRControls extends EventDispatcher{
 	}
 
 	_createAttributeMenu(){
-		const group = new THREE.Group();
-		group.name = 'vr-attribute-menu';
-		group.visible = false;
-
-		const bgMat = new THREE.MeshBasicMaterial({
-			color: 0x0d1b2e, transparent: true, opacity: 0.88, side: THREE.DoubleSide,
+		const {group} = this._createMenuPanel({
+			name: 'vr-attribute-menu', width: 0.85, height: 2.00,
+			title: 'ATRIBUTO', titleScale: 0.11, titleY: 0.88,
 		});
-		const bg = new THREE.Mesh(new THREE.PlaneGeometry(0.85, 2.00), bgMat);
-		group.add(bg);
-
-		const title = this._createMenuTitle('ATRIBUTO');
-		title.scale.set(0.11, 0.11, 0.11);
-		title.position.set(0, 0.88, 0.002);
-		group.add(title);
 
 		const radio = this._createRadioGroupWidget({
 			options: [
@@ -1721,12 +1646,9 @@ export class VRControls extends EventDispatcher{
 		const titleY = startY + 0.18;
 
 		// Fondo dimensionado al contenido
-		const bgMat = new THREE.MeshBasicMaterial({
-			color: 0x0d1b2e, transparent: true, opacity: 0.88, side: THREE.DoubleSide,
-		});
 		const topEdge = titleY + 0.06;
 		const bottomEdge = backY - 0.08;
-		const bg = new THREE.Mesh(new THREE.PlaneGeometry(0.64, topEdge - bottomEdge), bgMat);
+		const bg = new THREE.Mesh(new THREE.PlaneGeometry(0.64, topEdge - bottomEdge), this._menuBgMaterial());
 		bg.position.set(0, (topEdge + bottomEdge) / 2, 0);
 		group.add(bg);
 
@@ -1763,20 +1685,10 @@ export class VRControls extends EventDispatcher{
 	}
 
 	_createEditClassMenu(){
-		const group = new THREE.Group();
-		group.name = 'vr-edit-class-menu';
-		group.visible = false;
-
-		const bgMat = new THREE.MeshBasicMaterial({
-			color: 0x0d1b2e, transparent: true, opacity: 0.88, side: THREE.DoubleSide,
+		const {group, title} = this._createMenuPanel({
+			name: 'vr-edit-class-menu', width: 1.20, height: 1.45,
+			title: 'EDITAR CLASIFICACIÓN', titleScale: 0.093, titleY: 0.62,
 		});
-		const bg = new THREE.Mesh(new THREE.PlaneGeometry(1.20, 1.45), bgMat);
-		group.add(bg);
-
-		const title = this._createMenuTitle('EDITAR CLASIFICACIÓN');
-		title.scale.set(0.093, 0.093, 0.093);
-		title.position.set(0, 0.62, 0.002);
-		group.add(title);
 		this.editClassTitle = title;
 
 		const hint = this._createMenuTitle('Elige una clase, apunta y pulsa trigger');
@@ -1797,11 +1709,16 @@ export class VRControls extends EventDispatcher{
 		const ROW_H = 0.145;
 		const Y0 = 0.40;
 		const btnOpts = { width: 0.52, height: 0.14, canvasW: 464 };
+		// Convierte un color de clase ([r,g,b,a] floats 0-1) a string CSS rgb(...).
+		const colorToCss = (c) => c
+			? `rgb(${Math.round(c[0] * 255)}, ${Math.round(c[1] * 255)}, ${Math.round(c[2] * 255)})`
+			: null;
 		codes.forEach((code, i) => {
 			const cls = scheme[code];
 			const name = cls && cls.name ? cls.name : ('clase ' + code);
 			const label = `${code}: ${name}`;
-			const btn = this._createMenuButton(label, 'EDIT_CLASS_SET_TARGET', btnOpts);
+			const btn = this._createMenuButton(label, 'EDIT_CLASS_SET_TARGET',
+				Object.assign({}, btnOpts, { swatch: colorToCss(cls && cls.color) }));
 			btn.userData.classCode = code;
 			btn.userData.className = name;
 			const col = i % COLS;
@@ -1815,7 +1732,8 @@ export class VRControls extends EventDispatcher{
 
 		// Botón "default" (el DEFAULT real de Potree): como ORIGEN selecciona los puntos cuya clase
 		// NO está nombrada en el esquema (los que se pintan con el color default). No vale como DESTINO.
-		const btnDefault = this._createMenuButton('default', 'EDIT_CLASS_SET_TARGET', btnOpts);
+		const btnDefault = this._createMenuButton('default', 'EDIT_CLASS_SET_TARGET',
+			Object.assign({}, btnOpts, { swatch: colorToCss(scheme.DEFAULT && scheme.DEFAULT.color) }));
 		btnDefault.userData.realDefault = true;
 		{
 			const di = codes.length;
@@ -2186,7 +2104,6 @@ export class VRControls extends EventDispatcher{
 				}
 				if(ud.modeId === 'OPEN_CLASS_FOR_CLIP'){
 					if(this.clipBoxes.length === 0 && this._polygonClips.length === 0){
-						console.log('[EditClass] no hay zonas de recorte: coloca una zona primero (Delimitar Zonas o Dibujar Polígono).');
 						return;
 					}
 					this.editClassSegmentMode = true;
@@ -2520,7 +2437,6 @@ export class VRControls extends EventDispatcher{
 
 	_ensureMeasurement(){
 		if(this.activeMeasurement) return;
-		console.log('[VRPTS] creando Potree.Measure...');
 		const m = new Potree.Measure();
 		if(this.measureType === 'height'){
 			m.name = 'VR Altura';
@@ -2614,44 +2530,10 @@ export class VRControls extends EventDispatcher{
 		this.polygonMode = true;
 		this._polygonPoints = [];
 
-		// Cámara de proyección "según tu vista": ortográfica situada en la pose de la cabeza/cámara
-		// y orientada en la dirección de la mirada → el recorte se extruye como prisma recto en esa
-		// dirección. En escritorio la cámara activa ya está en espacio escena (sin toScene); en VR
-		// se parte de la cámara XR y se convierte con this.toScene (igual que _raycastPointClouds).
-		let scenePos, sceneDir;
-		if(this._isDesktop()){
-			const cam0 = this.viewer.scene.getActiveCamera();
-			scenePos = cam0.getWorldPosition(new THREE.Vector3());
-			sceneDir = cam0.getWorldDirection(new THREE.Vector3()).normalize();
-		}else{
-			const fakeCam = new THREE.PerspectiveCamera();
-			const camVR = this.viewer.renderer.xr.getCamera(fakeCam);
-			const vrPos = camVR.getWorldPosition(new THREE.Vector3());
-			const vrDir = camVR.getWorldDirection(new THREE.Vector3());
-			scenePos = this.toScene(vrPos);
-			sceneDir = this.toScene(vrPos.clone().add(vrDir)).sub(scenePos).normalize();
-		}
-
-		// Tamaño del frustum ortográfico ~ diagonal de la nube (irrelevante para el test, que
-		// es invariante a escala, pero mantiene NDC en un rango razonable).
-		const pc = this.viewer.scene.pointclouds[0];
-		let half = 50;
-		if(pc && pc.boundingBox){
-			const d = pc.boundingBox.getSize(new THREE.Vector3()).length();
-			if(d > 0) half = d * 0.5;
-		}
-
-		const cam = new THREE.OrthographicCamera(-half, half, half, -half, 0.01, Math.max(half * 10, 1000));
-		// up = Z de Potree; si la mirada es casi vertical, usar un up alternativo para evitar
-		// una orientación degenerada en lookAt.
-		const up = (Math.abs(sceneDir.z) > 0.99) ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, 0, 1);
-		cam.up.copy(up);
-		cam.position.copy(scenePos);
-		cam.lookAt(scenePos.clone().add(sceneDir));
-		cam.updateMatrix();
-		cam.updateMatrixWorld();
-		cam.updateProjectionMatrix();
-		this._polygonCamera = cam;
+		// La cámara de proyección que define la extrusión del recorte se construye al terminar
+		// (en _finishPolygon), a partir del centroide de los puntos dibujados: una cámara
+		// ortográfica cenital (mira a lo largo de −Z) → el prisma se extruye verticalmente como
+		// una huella (footprint), robusto a pendientes e independiente de la mirada.
 
 		// Previsualización del contorno (Potree.Measure cerrado, se renderiza en VR)
 		const m = new Potree.Measure();
@@ -2702,8 +2584,33 @@ export class VRControls extends EventDispatcher{
 	}
 
 	_finishPolygon(){
-		if(this._polygonPoints.length >= 3 && this._polygonCamera){
-			const v = new Potree.PolygonClipVolume(this._polygonCamera);
+		if(this._polygonPoints.length >= 3){
+			// Cámara ortográfica CENITAL (top-down, mira a lo largo de −Z) centrada en el
+			// centroide de los puntos dibujados → la proyección a NDC es la huella horizontal
+			// (X→NDC.x, Y→NDC.y) y la extrusión del recorte es vertical (eje Z de Potree),
+			// independiente de la mirada y robusta en pendientes.
+			const centroid = new THREE.Vector3();
+			for(const p of this._polygonPoints) centroid.add(p);
+			centroid.multiplyScalar(1 / this._polygonPoints.length);
+
+			// Tamaño del frustum ~ diagonal de la nube (irrelevante para el test, que es
+			// invariante a escala, pero mantiene NDC en un rango razonable).
+			const pc = this.viewer.scene.pointclouds[0];
+			let half = 50;
+			if(pc && pc.boundingBox){
+				const d = pc.boundingBox.getSize(new THREE.Vector3()).length();
+				if(d > 0) half = d * 0.5;
+			}
+			const up = Math.max(half * 2, 1000);
+			const cam = new THREE.OrthographicCamera(-half, half, half, -half, 0.01, up * 2);
+			cam.up.set(0, 1, 0); // Y del mundo como up: perpendicular a la vista −Z, no degenera
+			cam.position.set(centroid.x, centroid.y, centroid.z + up);
+			cam.lookAt(centroid);
+			cam.updateMatrix();
+			cam.updateMatrixWorld();
+			cam.updateProjectionMatrix();
+
+			const v = new Potree.PolygonClipVolume(cam);
 			// proj·view: proyecta los puntos pintados (mundo) a NDC, igual que hará el shader
 			// con proj·view·world·p_local. Guardamos los markers en NDC.
 			const vp = v.projMatrix.clone().multiply(v.viewMatrix);
@@ -2732,7 +2639,7 @@ export class VRControls extends EventDispatcher{
 		this._polygonCamera = null;
 		this.polygonMode = false;
 		this._setLaserLength(false);
-		this._showMenu(this.clipMenu);
+		// No reabrimos el menú automáticamente: al apretar squeeze solo se cierra y termina.
 	}
 
 	// ===== Punto de información =====
@@ -3076,10 +2983,7 @@ export class VRControls extends EventDispatcher{
 		const { position, node, pIndex, pointcloud } = result;
 		if(!node || !node.sceneNode) return;
 		const classAttr = node.sceneNode.geometry && node.sceneNode.geometry.attributes.classification;
-		if(!classAttr){
-			console.log('[EditClass] el nodo no tiene atributo classification');
-			return;
-		}
+		if(!classAttr) return;
 
 		const pc = pointcloud || this.viewer.scene.pointclouds[0];
 		const newCode = this.editClassTarget.code;
@@ -3224,9 +3128,8 @@ export class VRControls extends EventDispatcher{
 		return Math.abs(dx) <= 1 && Math.abs(dy) <= 1 && Math.abs(dz) <= 1;  // box
 	}
 
-	// Aplica una clase a TODOS los puntos dentro de las zonas de recorte activas
-	// (unión por forma exacta). Itera nodos cargados/visibles, escribe en el buffer de
-	// classification y registra cada cambio en editClassLog (lo verás luego en el TXT).
+	// Aplica una clase a todos los puntos dentro de las zonas de recorte activas: itera los
+	// nodos visibles, escribe en el buffer de classification y registra cada cambio en editClassLog.
 	_applyEditClassToClipBoxes(newCode, newName){
 		if(!this.clipBoxes.length && !this._polygonClips.length){
 			this.editClassSegmentMode = false;
@@ -3298,7 +3201,6 @@ export class VRControls extends EventDispatcher{
 			}
 		}
 
-		console.log(`[EditClass] segmento: ${changed} puntos reclasificados a '${newName}'`);
 		this._saveReclassJSON('zona', this.editClassOrigin, { name: newName },
 			this.editClassLog.slice(logStart));
 		this.editClassSegmentMode = false;
@@ -3327,10 +3229,7 @@ export class VRControls extends EventDispatcher{
 	// `destino`: objeto con .name. `entries`: subconjunto de editClassLog de esta operación.
 	// Solo cuando el origen es 'Cualquiera' (any) se incluye la clase original de cada punto.
 	_saveReclassJSON(modalidad, origen, destino, entries){
-		if(!entries || entries.length === 0){
-			console.log('[EditClass] no hay cambios para guardar');
-			return;
-		}
+		if(!entries || entries.length === 0) return;
 		const includeOriginal = !!(origen && origen.any === true);
 		const data = {
 			modalidad: modalidad,
@@ -3358,7 +3257,6 @@ export class VRControls extends EventDispatcher{
 		a.click();
 		document.body.removeChild(a);
 		setTimeout(() => window.URL.revokeObjectURL(url), 1000);
-		console.log(`[EditClass] guardado ${a.download} (${entries.length} puntos)`);
 	}
 
 	// Reaplica los overrides al buffer de un nodo recién cargado/visible
