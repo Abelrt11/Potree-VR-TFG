@@ -87688,10 +87688,6 @@ ENDSEC
 			// Colocar inicio del Paseo: coloca un punto y recalcula el inicio del modo paseo
 			this.walkStartMode = false;
 
-			// Tamaño de punto reducido durante la colocación (medidas, info, clasificación)
-			this._placementShrinkActive = false;
-			this._savedPointSizes = null;
-
 			// Recortado de zonas (clipping con cubo)
 			this.clipMode = false;
 			this.clipBoxes = [];          // [{ volume, handles: [6 meshes] }]
@@ -88507,7 +88503,7 @@ ENDSEC
 			interactives.push(...radioFondo.interactives);
 
 			// Slider: Tamaño de punto (material.size de las nubes). 0 = diminuto: el shader lo
-			// limita a minSize (~2px), igual que en los modos de colocación de medidas.
+			// limita a minSize (~2px).
 			const sliderPointSize = this._createSliderWidget({
 				label: 'Tamaño de punto',
 				min: 0, max: 3, step: 0.05,
@@ -89706,26 +89702,6 @@ ENDSEC
 			this.pointsMode = false;
 		}
 
-		_shrinkPointSizeForPlacement(){
-			this._savedPointSizes = [];
-			for(const pc of this.viewer.scene.pointclouds){
-				if(!pc || !pc.material) continue;
-				this._savedPointSizes.push({ material: pc.material, size: pc.material.size });
-				pc.material.size = 0; // el shader lo limita a minSize (~2 px)
-			}
-			this._placementShrinkActive = true;
-		}
-
-		_restorePointSize(){
-			if(this._savedPointSizes){
-				for(const e of this._savedPointSizes){
-					if(e.material) e.material.size = e.size;
-				}
-			}
-			this._savedPointSizes = null;
-			this._placementShrinkActive = false;
-		}
-
 		// ===== Recorte por polígono dibujado a mano =====
 
 		_startPolygonMode(){
@@ -90888,15 +90864,6 @@ ENDSEC
 		// tiradores de recorte). Compartido entre el bucle VR (update) y el de escritorio
 		// (desktopUpdate); todo el raycasting pasa por _pointerWorldRay, que es desktop-aware.
 		_updateActiveModes(delta, pointer){
-			// Reducir el tamaño de punto al mínimo mientras se colocan medidas, puntos de
-			// información o se edita clasificación, para apuntar con más precisión.
-			const placing = this.pointsMode || this.infoPointMode || this.editClassMode || this.polygonMode || this.walkStartMode;
-			if(placing && !this._placementShrinkActive){
-				this._shrinkPointSizeForPlacement();
-			}else if(!placing && this._placementShrinkActive){
-				this._restorePointSize();
-			}
-
 			// Preview del modo Puntos
 			if(this.pointsMode && !(this.activeMenu && this.activeMenu.visible)){
 				this._updatePreviewMarker(pointer);
